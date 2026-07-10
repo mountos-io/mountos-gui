@@ -1,0 +1,36 @@
+{
+  "name": "mountos-gui",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "check": "svelte-check --tsconfig ./tsconfig.json && tsc --noEmit",
+    "test": "vitest run",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
+  },
+  "dependencies": {
+    "@lucide/svelte": "^0.577.0",
+    "@tauri-apps/api": "^2.10.0",
+    "clsx": "^2.1.1",
+    "svelte": "^5.55.5",
+    "tailwind-merge": "^3.5.0"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5.1.1",
+    "@tauri-apps/cli": "^2.10.0",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/svelte": "^5.2.9",
+    "@tsconfig/svelte": "^5.0.5",
+    "@types/node": "^25.9.3",
+    "jsdom": "^27.2.0",
+    "svelte-check": "^4.4.6",
+    "typescript": "^5.9.3",
+    "vite": "^6.4.2",
+    "vitest": "^4.0.15"
+  }
+}

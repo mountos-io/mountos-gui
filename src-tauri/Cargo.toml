@@ -1,0 +1,25 @@
+[package]
+name = "mountos-desktop"
+version = "0.1.0"
+description = "mountOS Desktop"
+authors = ["mountOS"]
+license = "Apache-2.0"
+repository = ""
+edition = "2021"
+
+[lib]
+name = "mountos_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+keyring = { version = "3.6.3", features = ["apple-native", "windows-native"] }
+open = "5.3.3"
+regex = "1.12.3"
+tauri = { version = "2.11.5", features = ["tray-icon"] }
+thiserror = "2.0.17"
+which = "8.0.4"
