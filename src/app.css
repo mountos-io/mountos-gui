@@ -258,7 +258,7 @@ p {
 
 .input::placeholder,
 .textarea::placeholder {
-  color: oklch(from var(--muted-foreground) l c h / 0.7);
+  color: var(--muted-foreground);
 }
 
 .badge {
@@ -367,6 +367,42 @@ p {
   bottom: -1px;
   border-right: 1.5px solid var(--ring);
   border-bottom: 1.5px solid var(--ring);
+}
+
+/* Sanctioned pattern (DESIGN.md §5): dual-gradient 20px grid backdrop for
+   empty states. Structural brand signature, not decoration. */
+.tech-grid {
+  background-image:
+    linear-gradient(oklch(from var(--border) l c h / 0.6) 1px, transparent 1px),
+    linear-gradient(90deg, oklch(from var(--border) l c h / 0.6) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+.skeleton {
+  display: inline-block;
+  width: 100%;
+  max-width: 160px;
+  height: 14px;
+  background: var(--muted);
+  animation: skeleton-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes skeleton-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@media (pointer: coarse) {
+  .btn,
+  .icon-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
 }
 
 .sr-only {

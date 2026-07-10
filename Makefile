@@ -2,11 +2,13 @@
 
 MOUNTOS ?= ../mountos-servers/bin/mountos
 
-# Packaging & signing
+# Packaging & signing. macOS releases are universal binaries; Windows has no
+# universal format, so both architectures are built and signed separately.
 APP_NAME := mountOS Desktop
-BUNDLE_DIR := src-tauri/target/release/bundle
-MAC_APP := $(BUNDLE_DIR)/macos/$(APP_NAME).app
-TIMESTAMP_URL ?= http://timestamp.digicert.com
+MAC_TARGET := universal-apple-darwin
+MAC_BUNDLE_DIR := src-tauri/target/$(MAC_TARGET)/release/bundle
+MAC_APP := $(MAC_BUNDLE_DIR)/macos/$(APP_NAME).app
+WIN_TARGETS := x86_64-pc-windows-msvc aarch64-pc-windows-msvc
 
 .PHONY: help install dev desktop-dev check test test-rust lint format build desktop-build cli-smoke verify clean \
 	bundle sign-macos notarize-macos sign-windows release-macos release-windows
@@ -55,11 +57,15 @@ verify: check test test-rust lint build ## Run all local verification except pac
 # bundling, so release-macos only needs notarization afterwards. sign-macos is
 # the standalone fallback for re-signing an unsigned .app (the .dmg must be
 # rebuilt after a re-sign or it ships the unsigned copy).
-bundle: ## Build distributable bundles (macOS app+dmg, Windows nsis)
+bundle: ## Build distributable bundles (macOS universal app+dmg, Windows x64+arm64 nsis)
 ifeq ($(OS),Windows_NT)
-	npm run tauri:build -- --bundles nsis
+	rustup target add $(WIN_TARGETS)
+	@for target in $(WIN_TARGETS); do \
+		npm run tauri:build -- --target $$target --bundles nsis || exit 1; \
+	done
 else
-	npm run tauri:build -- --bundles app,dmg
+	rustup target add x86_64-apple-darwin aarch64-apple-darwin
+	npm run tauri:build -- --target $(MAC_TARGET) --bundles app,dmg
 endif
 
 sign-macos: ## Codesign the built .app (env: APPLE_SIGNING_IDENTITY)
@@ -71,19 +77,27 @@ notarize-macos: ## Notarize + staple the .dmg (env: APPLE_ID APPLE_PASSWORD APPL
 	@test -n "$(APPLE_ID)" || { echo "error: APPLE_ID is required"; exit 1; }
 	@test -n "$(APPLE_PASSWORD)" || { echo "error: APPLE_PASSWORD (app-specific password) is required"; exit 1; }
 	@test -n "$(APPLE_TEAM_ID)" || { echo "error: APPLE_TEAM_ID is required"; exit 1; }
-	@dmg=$$(ls "$(BUNDLE_DIR)/dmg"/*.dmg 2>/dev/null | head -1); \
-	test -n "$$dmg" || { echo "error: no .dmg under $(BUNDLE_DIR)/dmg; run make bundle first"; exit 1; }; \
+	@dmg=$$(ls "$(MAC_BUNDLE_DIR)/dmg"/*.dmg 2>/dev/null | head -1); \
+	test -n "$$dmg" || { echo "error: no .dmg under $(MAC_BUNDLE_DIR)/dmg; run make bundle first"; exit 1; }; \
 	xcrun notarytool submit "$$dmg" --apple-id "$(APPLE_ID)" --password "$(APPLE_PASSWORD)" --team-id "$(APPLE_TEAM_ID)" --wait; \
 	xcrun stapler staple "$$dmg"
 
 # Run from a POSIX shell (Git Bash or CI); signtool comes from the Windows SDK.
-sign-windows: ## signtool-sign the built NSIS installer (env: WINDOWS_CERT_PFX WINDOWS_CERT_PASSWORD)
-	@test -n "$(WINDOWS_CERT_PFX)" || { echo "error: WINDOWS_CERT_PFX (path to .pfx) is required"; exit 1; }
-	@test -n "$(WINDOWS_CERT_PASSWORD)" || { echo "error: WINDOWS_CERT_PASSWORD is required"; exit 1; }
-	@exe=$$(ls "$(BUNDLE_DIR)/nsis"/*.exe 2>/dev/null | head -1); \
-	test -n "$$exe" || { echo "error: no installer under $(BUNDLE_DIR)/nsis; run make bundle first"; exit 1; }; \
-	signtool sign /fd SHA256 /td SHA256 /tr "$(TIMESTAMP_URL)" /f "$(WINDOWS_CERT_PFX)" /p "$(WINDOWS_CERT_PASSWORD)" "$$exe"; \
-	signtool verify /pa "$$exe"
+# Signs with the certificate already imported into the Windows cert store, so
+# no password ever appears on a command line.
+sign-windows: ## signtool-sign every built NSIS installer, both arches (env: WINDOWS_CERT_THUMBPRINT TIMESTAMP_URL)
+	@test -n "$(WINDOWS_CERT_THUMBPRINT)" || { echo "error: WINDOWS_CERT_THUMBPRINT (SHA1 thumbprint of the store-imported cert) is required"; exit 1; }
+	@test -n "$(TIMESTAMP_URL)" || { echo "error: TIMESTAMP_URL is required (your CA's RFC 3161 server, e.g. http://time.certum.pl or http://timestamp.digicert.com)"; exit 1; }
+	@found=0; \
+	for target in $(WIN_TARGETS); do \
+		for exe in src-tauri/target/$$target/release/bundle/nsis/*.exe; do \
+			[ -e "$$exe" ] || continue; \
+			found=1; \
+			signtool sign /fd SHA256 /td SHA256 /tr "$(TIMESTAMP_URL)" /sha1 "$(WINDOWS_CERT_THUMBPRINT)" "$$exe" || exit 1; \
+			signtool verify /pa "$$exe" || exit 1; \
+		done; \
+	done; \
+	test "$$found" = "1" || { echo "error: no installer under src-tauri/target/<arch>/release/bundle/nsis; run make bundle first"; exit 1; }
 
 release-macos: bundle notarize-macos ## Bundle (signed via env) then notarize for macOS
 release-windows: bundle sign-windows ## Bundle then signtool-sign for Windows

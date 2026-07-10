@@ -29,7 +29,7 @@ List every available command with `make help`.
 
 ## Packaging and signing
 
-`make bundle` builds the distributable bundles for the current platform (macOS `.app` + `.dmg`, Windows NSIS installer). Signing and notarization read credentials from the environment, never from files in this repo.
+`make bundle` builds the distributable bundles for the current platform. macOS produces a universal `.app` + `.dmg` (Apple Silicon and Intel in one binary). Windows has no universal format, so both `x86_64` and `aarch64` NSIS installers are built, and `sign-windows` signs every installer it finds. The rule installs the required Rust targets automatically (the Windows arm64 build additionally needs the MSVC arm64 build tools). Signing and notarization read credentials from the environment, never from files in this repo.
 
 ### macOS
 
@@ -50,7 +50,7 @@ make release-macos
 
 ### Windows
 
-Run from a POSIX shell (Git Bash or CI). `signtool` comes from the Windows SDK.
+Run from a POSIX shell (Git Bash or CI). `signtool` comes from the Windows SDK. The EV code-signing certificate must already be imported into the Windows certificate store; signing references it by thumbprint, so no password appears on any command line. The private key stays on the EV hardware token (Certum card), and the token client (proCertum CardManager) shows its PIN dialog at signing time, so the card must be plugged in and the run attended unless the client's PIN caching is enabled.
 
 ```sh
 make release-windows
@@ -58,6 +58,5 @@ make release-windows
 
 | Variable | Used by | Meaning |
 |---|---|---|
-| `WINDOWS_CERT_PFX` | `sign-windows` | Path to the code-signing certificate (.pfx) |
-| `WINDOWS_CERT_PASSWORD` | `sign-windows` | Certificate password |
-| `TIMESTAMP_URL` | `sign-windows` | RFC 3161 timestamp server, defaults to DigiCert |
+| `WINDOWS_CERT_THUMBPRINT` | `sign-windows` | SHA1 thumbprint of the store-imported certificate |
+| `TIMESTAMP_URL` | `sign-windows` | Required. Your CA's RFC 3161 timestamp server (Certum `http://time.certum.pl`, DigiCert `http://timestamp.digicert.com`) |

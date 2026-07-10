@@ -3,7 +3,6 @@
     AlertTriangle,
     CheckCircle2,
     Copy,
-    Database,
     FileArchive,
     FileDown,
     FilePlus,
@@ -44,6 +43,7 @@
   type View = 'instances' | 'profiles' | 'health' | 'settings'
 
   let view = $state<View>('instances')
+  let loaded = $state(false)
   let profiles = $state<MountProfile[]>([])
   let systemState = $state<SystemState>({ platform: 'macos', checkOk: false, issues: [], instances: [] })
   let selectedProfileId = $state<string | null>(null)
@@ -68,7 +68,7 @@
 
   // Lost-mount detection compares only against snapshots taken during THIS
   // session, so pre-existing state at startup is never classified as a loss.
-  let knownInstanceKeys = new Set<string>()
+  let knownInstances = new Map<string, string>()
   const expectedGone = new Set<string>()
 
   const selectedProfile = $derived(profiles.find((profile) => profile.id === selectedProfileId) ?? profiles[0])
@@ -91,13 +91,13 @@
   }
 
   function detectLost(next: SystemState) {
-    const nextKeys = new Set(next.instances.map((instance) => instance.key))
-    for (const key of knownInstanceKeys) {
-      if (nextKeys.has(key)) continue
+    const nextInstances = new Map(next.instances.map((instance) => [instance.key, instance.mountPath || instance.name]))
+    for (const [key, label] of knownInstances) {
+      if (nextInstances.has(key)) continue
       if (expectedGone.delete(key)) continue
-      notify(`Mount disappeared: ${key}`, 'error')
+      notify(`Mount disappeared: ${label}`, 'error')
     }
-    knownInstanceKeys = nextKeys
+    knownInstances = nextInstances
   }
 
   async function pollSystem() {
@@ -128,6 +128,7 @@
       notify(error instanceof Error ? error.message : 'Refresh failed', 'error')
     } finally {
       busy = false
+      loaded = true
     }
   }
 
@@ -481,7 +482,7 @@
 <div class="app-shell">
   <aside class="sidebar">
     <div class="brand">
-      <div class="mark" aria-hidden="true"><Database size={18} /></div>
+      <img class="mark" src="/logo.png" alt="" width="36" height="36" />
       <h1>mountOS Desktop</h1>
     </div>
 
@@ -553,14 +554,25 @@
           <table class="table">
             <thead>
               <tr>
-                <th>Name</th>
-                <th>Target</th>
-                <th>Backend</th>
-                <th>Health</th>
-                <th>Actions</th>
+                <th scope="col">Name</th>
+                <th scope="col">Target</th>
+                <th scope="col">Backend</th>
+                <th scope="col">Health</th>
+                <th scope="col">Actions</th>
               </tr>
             </thead>
             <tbody>
+              {#if !loaded}
+                {#each { length: 3 } as _placeholder}
+                  <tr aria-hidden="true">
+                    <td><span class="skeleton"></span></td>
+                    <td><span class="skeleton wide"></span></td>
+                    <td><span class="skeleton narrow"></span></td>
+                    <td><span class="skeleton narrow"></span></td>
+                    <td><span class="skeleton narrow"></span></td>
+                  </tr>
+                {/each}
+              {:else}
               {#each filteredInstances as instance}
                 <tr>
                   <td>
@@ -596,13 +608,14 @@
               {:else}
                 <tr>
                   <td colspan="5">
-                    <div class="empty">
+                    <div class="empty tech-grid">
                       <strong>No instances</strong>
                       <p>Mount a saved profile, or mount from the CLI; same-user mounts appear here after refresh.</p>
                     </div>
                   </td>
                 </tr>
               {/each}
+              {/if}
             </tbody>
           </table>
         </div>
@@ -845,13 +858,10 @@
   }
 
   .mark {
-    display: grid;
-    place-items: center;
     width: 36px;
     height: 36px;
-    border: 1px solid var(--primary);
-    color: var(--primary);
     flex-shrink: 0;
+    object-fit: contain;
     clip-path: polygon(0 8px, 8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%);
   }
 
@@ -914,7 +924,9 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    min-width: 220px;
+    flex: 1 1 160px;
+    min-width: 160px;
+    max-width: 260px;
     border: 1px solid var(--border);
     background: var(--input);
     padding: 0 10px;
@@ -1136,6 +1148,26 @@
     gap: 12px;
     border: 1px solid var(--border);
     padding: 12px;
+  }
+
+  .issue :global(.error) {
+    color: var(--destructive);
+  }
+
+  .issue :global(.warning) {
+    color: var(--warning);
+  }
+
+  .issue :global(.info) {
+    color: var(--muted-foreground);
+  }
+
+  .skeleton.narrow {
+    max-width: 80px;
+  }
+
+  .skeleton.wide {
+    max-width: 240px;
   }
 
   .modal {

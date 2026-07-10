@@ -243,6 +243,8 @@ All utilities live in `src/app.css`.
 
 ### Sanctioned patterns (NOT "decorative gradients")
 - Corner-bracket marks, the LED pulse, and the brand mark's clip-path chamfer are structural signature, keep them.
+- `.tech-grid`, the dual `linear-gradient` 20px grid backdrop on empty states. Brand backdrop, keep.
+- `.skeleton`, the opacity-pulse loading placeholder (no shimmer gradient); collapses under reduced motion.
 - Any NEW gradient, glow, or clip-path must earn an explicit entry here. Default-deny.
 
 ## 6. Do's and Don'ts

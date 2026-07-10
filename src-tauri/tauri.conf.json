@@ -29,6 +29,13 @@
     "targets": ["app"],
     "category": "Utility",
     "shortDescription": "mountOS desktop mount client",
-    "longDescription": "A desktop supervisor for mounting, unmounting, and diagnosing mountOS volumes."
+    "longDescription": "A desktop supervisor for mounting, unmounting, and diagnosing mountOS volumes.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
   }
 }
