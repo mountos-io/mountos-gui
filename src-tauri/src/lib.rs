@@ -134,12 +134,18 @@ struct ExportedProfile {
 #[serde(rename_all = "camelCase")]
 struct DesktopSettings {
     default_backend: Backend,
+    // Seeds new profiles' discoveryUrl; each profile can still override it
+    // independently afterward. Existing profiles are never retroactively
+    // rewritten when this changes. Option<T> deserializes missing older
+    // settings.json files (pre-dating this field) as None automatically.
+    default_discovery_url: Option<String>,
 }
 
 impl Default for DesktopSettings {
     fn default() -> Self {
         Self {
             default_backend: Backend::Auto,
+            default_discovery_url: None,
         }
     }
 }
@@ -342,6 +348,16 @@ fn validate_extra_args(args: &[String]) -> Vec<String> {
     rejected
 }
 
+// backend_needs_mount_path reports whether `backend` uses a real,
+// user-chosen filesystem path at all. FileProvider and CloudFilter mounts
+// are entirely OS-managed (FileProvider via NSFileProviderManager, keyed by
+// --name / the volume's Finder display name; CloudFilter's own CLI-side
+// mount-point requirement is waived identically, cmd/mfuse/cmd_mount.go)
+// — mountos never reads -m for either, so passing one is meaningless.
+fn backend_needs_mount_path(backend: &Backend) -> bool {
+    !matches!(backend, Backend::Fileprovider | Backend::Cloudfilter)
+}
+
 fn build_mount_argv(profile: &MountProfile) -> Vec<String> {
     let mut argv = vec!["mount".to_string()];
     if !profile.discovery_url.is_empty() {
@@ -353,7 +369,7 @@ fn build_mount_argv(profile: &MountProfile) -> Vec<String> {
     if !profile.fork.is_empty() {
         argv.extend(["--fork-name".to_string(), profile.fork.clone()]);
     }
-    if !profile.mount_path.is_empty() {
+    if backend_needs_mount_path(&profile.backend) && !profile.mount_path.is_empty() {
         argv.extend(["-m".to_string(), profile.mount_path.clone()]);
     }
     if !profile.access_key_id.is_empty() {
@@ -410,6 +426,28 @@ fn validate_backend_for_platform(backend: &Backend) -> Result<(), DesktopError> 
             std::env::consts::OS
         )))
     }
+}
+
+// FSKit requires its mount point to live under this exact directory — the
+// kernel-side FSKit extension registration only resolves volumes rooted
+// here, mirroring the same constraint the mos-sanity/mos-tests skills
+// already document for manual FSKit testing.
+const FSKIT_MOUNT_PREFIX: &str = "/Volumes/MountOS/";
+
+fn validate_mount_path_for_backend(
+    backend: &Backend,
+    mount_path: &str,
+) -> Result<(), DesktopError> {
+    if matches!(backend, Backend::Fskit) {
+        let trimmed = mount_path.trim_end_matches('/');
+        if trimmed.is_empty() || !(trimmed.starts_with(FSKIT_MOUNT_PREFIX) && trimmed.len() > FSKIT_MOUNT_PREFIX.len())
+        {
+            return Err(DesktopError::Message(format!(
+                "FSKit requires a mount point under {FSKIT_MOUNT_PREFIX}<name>, got {mount_path:?}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -903,6 +941,7 @@ fn save_profile(app: AppHandle, profile: MountProfile) -> Result<MountProfile, D
             "unsupported profile kind".to_string(),
         ));
     }
+    validate_mount_path_for_backend(&profile.backend, &profile.mount_path)?;
     let rejected = validate_extra_args(&profile.extra_args);
     if !rejected.is_empty() {
         return Err(DesktopError::Message(format!(
@@ -1023,6 +1062,7 @@ fn mount_profile_blocking(
         .ok_or_else(|| DesktopError::Message("profile not found".to_string()))?;
     validate_backend_for_platform(&profile.backend)?;
     resolve_auto_backend(&mut profile)?;
+    validate_mount_path_for_backend(&profile.backend, &profile.mount_path)?;
     let rejected = validate_extra_args(&profile.extra_args);
     if !rejected.is_empty() {
         return Err(DesktopError::Message(format!(
@@ -1030,10 +1070,11 @@ fn mount_profile_blocking(
             rejected.join(", ")
         )));
     }
-    if profile.mount_path.is_empty() {
+    let needs_mount_path = backend_needs_mount_path(&profile.backend);
+    if needs_mount_path && profile.mount_path.is_empty() {
         return Err(DesktopError::Message("mount path is required".to_string()));
     }
-    if list_contains_target(&profile.mount_path)? {
+    if needs_mount_path && list_contains_target(&profile.mount_path)? {
         return Err(DesktopError::Message(format!(
             "target is already mounted: {}",
             profile.mount_path
@@ -1307,6 +1348,35 @@ mod tests {
         assert!(!argv.contains(&"--fork".to_string()));
         assert!(!argv.contains(&"--cache-dir".to_string()));
         assert!(!argv.iter().any(|arg| arg.len() == 40));
+    }
+
+    #[test]
+    fn omits_mount_flag_for_os_managed_backends() {
+        let mut p = profile();
+        p.mount_path = "/some/leftover/path".to_string();
+        p.backend = Backend::Fileprovider;
+        assert!(!build_mount_argv(&p).contains(&"-m".to_string()));
+
+        p.backend = Backend::Cloudfilter;
+        assert!(!build_mount_argv(&p).contains(&"-m".to_string()));
+
+        p.backend = Backend::Nfs;
+        assert!(build_mount_argv(&p).contains(&"-m".to_string()));
+    }
+
+    #[test]
+    fn validates_fskit_mount_path_prefix() {
+        assert!(validate_mount_path_for_backend(&Backend::Fskit, "/Volumes/MountOS/Team").is_ok());
+        assert!(validate_mount_path_for_backend(&Backend::Fskit, "/Volumes/MountOS/Team/").is_ok());
+        assert!(validate_mount_path_for_backend(&Backend::Fskit, "/Volumes/MountOS/").is_err());
+        assert!(validate_mount_path_for_backend(&Backend::Fskit, "/Volumes/MountOS").is_err());
+        assert!(validate_mount_path_for_backend(&Backend::Fskit, "/tmp/Team").is_err());
+        assert!(validate_mount_path_for_backend(&Backend::Fskit, "").is_err());
+        // Case-sensitive: the real FSKit registration is a literal path match.
+        assert!(validate_mount_path_for_backend(&Backend::Fskit, "/volumes/mountos/Team").is_err());
+        // Non-FSKit backends are never gated by this check.
+        assert!(validate_mount_path_for_backend(&Backend::Nfs, "/tmp/anything").is_ok());
+        assert!(validate_mount_path_for_backend(&Backend::Nfs, "").is_ok());
     }
 
     #[test]

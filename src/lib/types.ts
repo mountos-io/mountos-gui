@@ -74,6 +74,10 @@ export interface SecretStatus {
 
 export interface DesktopSettings {
   defaultBackend: Backend
+  // Seeds new profiles' discoveryUrl; each profile can still override it
+  // independently afterward. Existing profiles are never retroactively
+  // rewritten when this changes.
+  defaultDiscoveryUrl?: string
 }
 
 export interface ExportedProfile {

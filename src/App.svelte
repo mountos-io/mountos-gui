@@ -21,7 +21,7 @@
     Unplug,
     X,
   } from '@lucide/svelte'
-  import { buildMountArgv, classifyMountError, errorClassLabel, parseArgvInput, validateExtraArgs } from './lib/cli'
+  import { backendNeedsMountPath, buildMountArgv, classifyMountError, errorClassLabel, parseArgvInput, validateExtraArgs, validateMountPathForBackend } from './lib/cli'
   import {
     createDiagnosticsBundle,
     deleteProfile,
@@ -142,7 +142,7 @@
       volume: '',
       fork: 'main',
       mountPath: '',
-      discoveryUrl: '',
+      discoveryUrl: settings.defaultDiscoveryUrl ?? '',
       accessKeyId: '',
       secretRef: 'prompt',
       backend: backends.includes(settings.defaultBackend) ? settings.defaultBackend : 'auto',
@@ -415,6 +415,13 @@
         : ['auto', 'nfs'],
   )
 
+  const mountPathIsManaged = $derived(selectedProfile ? !backendNeedsMountPath(selectedProfile.backend) : false)
+  const mountPathError = $derived.by(() => {
+    if (!selectedProfile || mountPathIsManaged) return ''
+    if (!selectedProfile.mountPath.trim()) return 'Mount path is required for this backend'
+    return validateMountPathForBackend(selectedProfile.backend, selectedProfile.mountPath) ?? ''
+  })
+
   function initialDark() {
     if (typeof localStorage === 'undefined') return false
     const stored = localStorage.getItem('mountos-desktop-dark')
@@ -444,6 +451,16 @@
     try {
       settings = await saveSettings({ ...settings, defaultBackend: backend })
       notify(`New profiles default to the ${backend} backend`)
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Failed to save settings', 'error')
+    }
+  }
+
+  async function changeDefaultDiscoveryUrl(discoveryUrl: string) {
+    const trimmed = discoveryUrl.trim()
+    try {
+      settings = await saveSettings({ ...settings, defaultDiscoveryUrl: trimmed || undefined })
+      notify(trimmed ? 'New profiles default to this discovery URL' : 'Default discovery URL cleared')
     } catch (error) {
       notify(error instanceof Error ? error.message : 'Failed to save settings', 'error')
     }
@@ -651,11 +668,11 @@
                 <button class="btn icon-btn destructive" type="button" title="Delete profile" aria-label="Delete profile" disabled={busy} onclick={() => (deletePromptFor = selectedProfile)}>
                   <Trash2 size={16} aria-hidden="true" />
                 </button>
-                <button class="btn" type="button" disabled={busy || !!extraArgsError || rejectedArgs.length > 0} onclick={() => runMount(selectedProfile)}>
+                <button class="btn" type="button" disabled={busy || !!extraArgsError || rejectedArgs.length > 0 || !!mountPathError} onclick={() => runMount(selectedProfile)}>
                   <Power size={16} aria-hidden="true" />
                   Mount
                 </button>
-                <button class="btn primary" type="submit" disabled={busy || !!extraArgsError || rejectedArgs.length > 0}>
+                <button class="btn primary" type="submit" disabled={busy || !!extraArgsError || rejectedArgs.length > 0 || !!mountPathError}>
                   <Save size={16} aria-hidden="true" />
                   Save
                 </button>
@@ -691,7 +708,21 @@
               </label>
               <label class="field">
                 <span>Mount path</span>
-                <input class="input" value={selectedProfile.mountPath} oninput={(e) => patchProfile({ mountPath: e.currentTarget.value })} />
+                {#if mountPathIsManaged}
+                  <input class="input" value={selectedProfile.mountPath} disabled placeholder="Managed automatically by the OS" />
+                  <small>
+                    {selectedProfile.backend === 'fileprovider'
+                      ? 'FileProvider mounts have no filesystem path; the volume appears in Finder under its volume name.'
+                      : 'CloudFilter mounts have no filesystem path; the volume appears under its own drive/namespace.'}
+                  </small>
+                {:else}
+                  <input
+                    class="input"
+                    value={selectedProfile.mountPath}
+                    placeholder={selectedProfile.backend === 'fskit' ? '/Volumes/MountOS/<name>' : undefined}
+                    oninput={(e) => patchProfile({ mountPath: e.currentTarget.value })}
+                  />
+                {/if}
               </label>
               <label class="field">
                 <span>Secret</span>
@@ -701,6 +732,13 @@
                 </select>
               </label>
             </div>
+
+            {#if mountPathError}
+              <div class="callout warning">
+                <AlertTriangle size={17} aria-hidden="true" />
+                <span>{mountPathError}</span>
+              </div>
+            {/if}
 
             <div class="vault-row">
               <span class="badge {vaultStatus[selectedProfile.id] ? 'success' : 'warning'}">
@@ -791,6 +829,16 @@
           <select class="select setting-select" value={settings.defaultBackend} onchange={(e) => changeDefaultBackend(e.currentTarget.value as Backend)}>
             {#each backends as backend}<option value={backend}>{backend}</option>{/each}
           </select>
+        </label>
+        <label class="setting-row">
+          <span><strong>Default discovery URL</strong><small>Seeds new profiles. Each profile can still override it individually; existing profiles are never rewritten when this changes.</small></span>
+          <input
+            class="input setting-select"
+            type="text"
+            placeholder="https://hub.example.com"
+            value={settings.defaultDiscoveryUrl ?? ''}
+            onchange={(e) => changeDefaultDiscoveryUrl(e.currentTarget.value)}
+          />
         </label>
       </section>
     {/if}
@@ -1046,7 +1094,8 @@
   }
 
   .profile-row small,
-  .setting-row small {
+  .setting-row small,
+  .field small {
     color: var(--muted-foreground);
     font-size: 1rem;
   }

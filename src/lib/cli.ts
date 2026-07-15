@@ -68,6 +68,24 @@ const backendArgv: Partial<Record<Backend, string[]>> = {
   cloudfilter: ['--backend', 'cloudfilter'],
 }
 
+// UI-only mirror of src-tauri/src/lib.rs's backend_needs_mount_path /
+// validate_mount_path_for_backend — same hand-synced-duplicate caveat as
+// the flag allowlists above; the Rust side independently re-validates.
+export function backendNeedsMountPath(backend: Backend): boolean {
+  return backend !== 'fileprovider' && backend !== 'cloudfilter'
+}
+
+const FSKIT_MOUNT_PREFIX = '/Volumes/MountOS/'
+
+export function validateMountPathForBackend(backend: Backend, mountPath: string): string | null {
+  if (backend !== 'fskit') return null
+  const trimmed = mountPath.replace(/\/+$/, '')
+  if (!trimmed.startsWith(FSKIT_MOUNT_PREFIX) || trimmed.length <= FSKIT_MOUNT_PREFIX.length) {
+    return `FSKit requires a mount point under ${FSKIT_MOUNT_PREFIX}<name>`
+  }
+  return null
+}
+
 export function validateExtraArgs(args: string[]): string[] {
   const rejected: string[] = []
 
@@ -116,7 +134,7 @@ export function buildMountArgv(profile: MountProfile): string[] {
   if (profile.discoveryUrl) argv.push('--discovery-url', profile.discoveryUrl)
   if (profile.volume) argv.push('--volname', profile.volume)
   if (profile.fork) argv.push('--fork-name', profile.fork)
-  if (profile.mountPath) argv.push('-m', profile.mountPath)
+  if (backendNeedsMountPath(profile.backend) && profile.mountPath) argv.push('-m', profile.mountPath)
   if (profile.accessKeyId) argv.push('-a', profile.accessKeyId, '-s')
   if (profile.readOnly) argv.push('--read-only')
   if (profile.cacheDir) argv.push('--disk-cache-dir', profile.cacheDir)

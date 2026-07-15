@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildMountArgv, classifyMountError, parseArgvInput, validateExtraArgs } from './cli'
+import { backendNeedsMountPath, buildMountArgv, classifyMountError, parseArgvInput, validateExtraArgs, validateMountPathForBackend } from './cli'
 import type { MountProfile } from './types'
 
 const profile: MountProfile = {
@@ -49,6 +49,11 @@ describe('cli helpers', () => {
     expect(argv).not.toContain('-s')
   })
 
+  it('omits -m for FileProvider/CloudFilter even with a leftover mountPath', () => {
+    const argv = buildMountArgv({ ...profile, backend: 'fileprovider', mountPath: '/some/leftover/path' })
+    expect(argv).not.toContain('-m')
+  })
+
   it('rejects managed extra args and duplicate positionals', () => {
     expect(validateExtraArgs(['--smb', '--secret-access-key=x', '-sa', '/tmp/mount'])).toEqual([
       '--smb',
@@ -60,6 +65,24 @@ describe('cli helpers', () => {
 
   it('allows separate values for unmanaged flags', () => {
     expect(validateExtraArgs(['--disk-cache-size', '10G', '--debug'])).toEqual([])
+  })
+
+  it('reports FileProvider and CloudFilter as not needing a mount path', () => {
+    expect(backendNeedsMountPath('fileprovider')).toBe(false)
+    expect(backendNeedsMountPath('cloudfilter')).toBe(false)
+    expect(backendNeedsMountPath('nfs')).toBe(true)
+    expect(backendNeedsMountPath('fskit')).toBe(true)
+  })
+
+  it('validates FSKit mount path prefix', () => {
+    expect(validateMountPathForBackend('fskit', '/Volumes/MountOS/Team')).toBeNull()
+    expect(validateMountPathForBackend('fskit', '/Volumes/MountOS/Team/')).toBeNull()
+    expect(validateMountPathForBackend('fskit', '/Volumes/MountOS/')).not.toBeNull()
+    expect(validateMountPathForBackend('fskit', '/Volumes/MountOS')).not.toBeNull()
+    expect(validateMountPathForBackend('fskit', '/tmp/Team')).not.toBeNull()
+    expect(validateMountPathForBackend('fskit', '')).not.toBeNull()
+    expect(validateMountPathForBackend('nfs', '/tmp/anything')).toBeNull()
+    expect(validateMountPathForBackend('nfs', '')).toBeNull()
   })
 
   it('validates short flag clusters', () => {
