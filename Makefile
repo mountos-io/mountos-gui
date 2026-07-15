@@ -11,7 +11,8 @@ MAC_APP := $(MAC_BUNDLE_DIR)/macos/$(APP_NAME).app
 WIN_TARGETS := x86_64-pc-windows-msvc aarch64-pc-windows-msvc
 
 .PHONY: help install dev desktop-dev check test test-rust lint format build desktop-build cli-smoke verify clean \
-	bundle sign-macos notarize-macos sign-windows release-macos release-windows
+	bundle sign-macos notarize-macos sign-windows release-macos release-windows \
+	bump-patch bump-minor bump-major set-version
 
 help: ## List every available make command
 	@awk 'BEGIN {FS = ":.*## "; printf "mountOS Desktop commands:\n\n"} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -104,3 +105,16 @@ release-windows: bundle sign-windows ## Bundle then signtool-sign for Windows
 
 clean: ## Remove generated frontend and Rust build artifacts
 	rm -rf dist src-tauri/target
+
+bump-patch: ## Bump package.json + tauri.conf.json patch version (default routine bump)
+	@scripts/bump-version.sh patch
+
+bump-minor: ## Bump package.json + tauri.conf.json minor version
+	@scripts/bump-version.sh minor
+
+bump-major: ## Bump package.json + tauri.conf.json major version
+	@scripts/bump-version.sh major
+
+set-version: ## Force an exact version, e.g. make set-version VERSION=1.0.0
+	@test -n "$(VERSION)" || { echo "error: VERSION is required, e.g. make set-version VERSION=1.0.0"; exit 1; }
+	@scripts/bump-version.sh set "$(VERSION)"
