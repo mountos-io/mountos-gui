@@ -1,5 +1,13 @@
 import type { Backend, ErrorClass, MountProfile } from './types'
 
+// UI-only mirror of src-tauri/src/lib.rs's validate_extra_args — gives the
+// user inline "rejected" feedback before they hit Save/Mount. The Rust side
+// independently re-validates everything from the on-disk profile before
+// acting, so this copy is not itself a security boundary, but it IS a
+// hand-synced duplicate: any change to the flag sets below (or to the
+// short-cluster scan logic) must be mirrored in lib.rs's managed_flags()/
+// boolean_long_flags(), and both must stay in sync with mountos-servers'
+// cmd/mfuse CLI flag surface. No automated check currently catches drift.
 const managedFlags = new Set([
   'a',
   'access-key-id',
@@ -30,6 +38,11 @@ const managedFlags = new Set([
   'F',
 ])
 
+// gateway-* flags are deliberately excluded: validateExtraArgs rejects any
+// long flag starting with "gateway-" outright (see the `rawName.startsWith
+// ('gateway-')` check below), regardless of what's listed here, since
+// gateway profiles aren't supported yet (save_profile hard-rejects any kind
+// other than "mount"). Revisit once gateway profile support ships.
 const booleanLongFlags = new Set([
   'acl',
   'agent',
@@ -37,11 +50,6 @@ const booleanLongFlags = new Set([
   'browse',
   'debug',
   'disable-cache-dir',
-  'gateway-allow-reuse-port',
-  'gateway-keep-etag',
-  'gateway-no-loopback',
-  'gateway-object-meta',
-  'gateway-object-tags',
   'ioctl',
   'null-permissions',
   'session-audit',

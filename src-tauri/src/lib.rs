@@ -226,6 +226,15 @@ fn read_profiles(app: &AppHandle) -> Result<Vec<MountProfile>, DesktopError> {
     Ok(profiles)
 }
 
+// SECURITY BOUNDARY, hand-synced against a separate repo. These two flag
+// sets (and their TS mirrors in src/lib/cli.ts) are what stops a profile's
+// "extra args" field from overriding security-sensitive managed flags
+// (discovery URL, credentials, mount target). They must be updated whenever
+// mountos-servers' cmd/mfuse CLI adds a new flag — especially a new
+// value-taking SHORT flag, since validate_extra_args's short-cluster scan
+// only special-cases '-o' as a value-absorbing flag; any other new
+// value-taking short flag would need the same treatment or it risks being
+// silently misparsed. No automated check currently catches drift here.
 fn managed_flags() -> HashSet<&'static str> {
     [
         "a",
@@ -260,6 +269,11 @@ fn managed_flags() -> HashSet<&'static str> {
     .collect()
 }
 
+// gateway-* flags are deliberately excluded: validate_extra_args rejects any
+// long flag starting with "gateway-" outright (see the `name.starts_with
+// ("gateway-")` check below), regardless of what's listed here, since
+// gateway profiles aren't supported yet (save_profile hard-rejects any kind
+// other than "mount"). Revisit once gateway profile support ships.
 fn boolean_long_flags() -> HashSet<&'static str> {
     [
         "acl",
@@ -268,11 +282,6 @@ fn boolean_long_flags() -> HashSet<&'static str> {
         "browse",
         "debug",
         "disable-cache-dir",
-        "gateway-allow-reuse-port",
-        "gateway-keep-etag",
-        "gateway-no-loopback",
-        "gateway-object-meta",
-        "gateway-object-tags",
         "ioctl",
         "null-permissions",
         "session-audit",
@@ -1122,6 +1131,17 @@ fn unmount_target_blocking(target: String) -> Result<UnmountResult, DesktopError
             "unmount target is required".to_string(),
         ));
     }
+    // Mirrors open_target's guard: the UI's mount list can be up to 30s
+    // stale (background polling interval), so re-verify against a fresh
+    // `list --json` immediately before acting rather than trusting a
+    // possibly-stale row the user is looking at. Closes the window where a
+    // different volume could have taken over the same mount path since the
+    // last poll.
+    if !list_contains_target(&target)? {
+        return Err(DesktopError::Message(format!(
+            "refusing to unmount a path that is not an active mount target: {target}"
+        )));
+    }
     let output = Command::new(mountos_path()?)
         .args(["unmount", "-y", &target])
         .output()?;
@@ -1300,6 +1320,33 @@ mod tests {
         assert_eq!(
             validate_extra_args(&["--mount".to_string(), "/tmp/other".to_string()]),
             vec!["--mount".to_string(), "/tmp/other".to_string()]
+        );
+    }
+
+    #[test]
+    fn validates_short_flag_clusters() {
+        // A managed short flag anywhere before the '-o' value-absorbing
+        // point is caught, regardless of position in the cluster.
+        assert_eq!(
+            validate_extra_args(&["-am".to_string()]),
+            vec!["-am".to_string()]
+        );
+        assert_eq!(
+            validate_extra_args(&["-ma".to_string()]),
+            vec!["-ma".to_string()]
+        );
+        // '-o' takes a fused value (mirrors real short-opt parsing: once a
+        // value-taking flag is hit in a cluster, the rest of the token is
+        // its value, not further flags) — bare '-o' and '-o<value>' are both
+        // accepted even when the value text collides with a managed letter.
+        assert!(validate_extra_args(&["-o".to_string()]).is_empty());
+        assert!(validate_extra_args(&["-oallow_other".to_string()]).is_empty());
+        assert!(validate_extra_args(&["-oa".to_string()]).is_empty());
+        // Bare "--" (positional separator) is rejected like any other
+        // non-managed-but-suspicious positional.
+        assert_eq!(
+            validate_extra_args(&["--".to_string()]),
+            vec!["--".to_string()]
         );
     }
 

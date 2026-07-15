@@ -62,6 +62,23 @@ describe('cli helpers', () => {
     expect(validateExtraArgs(['--disk-cache-size', '10G', '--debug'])).toEqual([])
   })
 
+  it('validates short flag clusters', () => {
+    // A managed short flag anywhere before the '-o' value-absorbing point
+    // is caught, regardless of position in the cluster.
+    expect(validateExtraArgs(['-am'])).toEqual(['-am'])
+    expect(validateExtraArgs(['-ma'])).toEqual(['-ma'])
+    // '-o' takes a fused value (mirrors real short-opt parsing: once a
+    // value-taking flag is hit in a cluster, the rest of the token is its
+    // value, not further flags) — bare '-o' and '-o<value>' are both
+    // accepted even when the value text collides with a managed letter.
+    expect(validateExtraArgs(['-o'])).toEqual([])
+    expect(validateExtraArgs(['-oallow_other'])).toEqual([])
+    expect(validateExtraArgs(['-oa'])).toEqual([])
+    // Bare "--" (positional separator) is rejected like any other
+    // non-managed-but-suspicious positional.
+    expect(validateExtraArgs(['--'])).toEqual(['--'])
+  })
+
   it('preserves quoted and escaped extra-argument values', () => {
     expect(parseArgvInput('--disk-cache-size 10G --mount-opts "allow_other,volname=Team Files"')).toEqual([
       '--disk-cache-size',
