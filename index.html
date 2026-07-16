@@ -5,6 +5,30 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/png" href="/logo.png" />
     <title>mountOS Desktop</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #f3efe0;
+      }
+      html.dark,
+      html.dark body {
+        background: #010101;
+      }
+    </style>
+    <script>
+      // Runs before first paint so the themed background is correct from the
+      // very first frame instead of flashing white, then dark/light again
+      // once the app's own dark-mode effect picks up the same storage key.
+      ;(function () {
+        try {
+          var stored = localStorage.getItem('mountos-desktop-theme')
+          var theme = stored === 'light' || stored === 'dark' ? stored : 'system'
+          var dark = theme === 'dark' || (theme === 'system' && matchMedia('(prefers-color-scheme: dark)').matches)
+          if (dark) document.documentElement.classList.add('dark')
+        } catch (error) {}
+      })()
+    </script>
   </head>
   <body>
     <div id="app"></div>

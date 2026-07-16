@@ -28,6 +28,7 @@ export interface MountProfile {
   cacheDir?: string
   readOnly: boolean
   autoRemount: boolean
+  temporaryFork: boolean
   trustedDiscoveryHost?: string
   extraArgs: string[]
   createdAt: string
@@ -65,6 +66,10 @@ export interface SystemState {
   checkOk: boolean
   issues: CheckIssue[]
   instances: MountInstance[]
+  // Other mountos binaries found on PATH besides the one in use (empty in
+  // the common single-install case). Surfaces ambiguity instead of
+  // silently trusting whichever PATH match resolved first.
+  cliPathAlternates: string[]
 }
 
 export interface SecretStatus {
@@ -78,6 +83,10 @@ export interface DesktopSettings {
   // independently afterward. Existing profiles are never retroactively
   // rewritten when this changes.
   defaultDiscoveryUrl?: string
+  // Pins an exact mountos binary instead of the first PATH match. Once
+  // set, a moved/missing pinned binary is a hard error rather than a
+  // silent fallback to a different install.
+  cliPathOverride?: string
 }
 
 export interface ExportedProfile {

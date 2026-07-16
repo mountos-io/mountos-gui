@@ -1,7 +1,10 @@
 <script lang="ts">
   import {
     AlertTriangle,
+    Bot,
     CheckCircle2,
+    ChevronDown,
+    ChevronRight,
     Copy,
     FileArchive,
     FileDown,
@@ -9,7 +12,13 @@
     FolderOpen,
     HardDrive,
     KeyRound,
+    LayoutDashboard,
+    Lightbulb,
+    Monitor,
     MonitorDot,
+    Moon,
+    PanelLeftClose,
+    PanelLeftOpen,
     Plus,
     Power,
     RefreshCw,
@@ -17,20 +26,31 @@
     Search,
     Settings,
     ShieldCheck,
+    SquareTerminal,
+    Sun,
     Trash2,
     Unplug,
     X,
   } from '@lucide/svelte'
   import { backendNeedsMountPath, buildMountArgv, classifyMountError, errorClassLabel, parseArgvInput, validateExtraArgs, validateMountPathForBackend } from './lib/cli'
+  import { healthTone } from './lib/health'
+  import { applyTheme, loadTheme, saveTheme } from './lib/theme'
+  import type { Theme } from './lib/theme'
   import {
     createDiagnosticsBundle,
     deleteProfile,
     deleteProfileSecret,
     exportProfile,
+    getInstanceConfig,
     getProfileSecretStatus,
     getSettings,
     getSystemState,
+    launchDashboard,
     listProfiles,
+    mcpInstall,
+    mcpStatus,
+    mcpUninstall,
+    mountHelp,
     mountProfile,
     openTarget,
     saveProfile,
@@ -45,7 +65,7 @@
   let view = $state<View>('instances')
   let loaded = $state(false)
   let profiles = $state<MountProfile[]>([])
-  let systemState = $state<SystemState>({ platform: 'macos', checkOk: false, issues: [], instances: [] })
+  let systemState = $state<SystemState>({ platform: 'macos', checkOk: false, issues: [], instances: [], cliPathAlternates: [] })
   let selectedProfileId = $state<string | null>(null)
   let query = $state('')
   let busy = $state(false)
@@ -65,6 +85,10 @@
   let settings = $state<DesktopSettings>({ defaultBackend: 'auto' })
   let vaultStatus = $state<Record<string, boolean>>({})
   let diagnosticsPath = $state('')
+  let mcpStatusText = $state('')
+  let expandedConfig = $state<Record<string, string>>({})
+  let mountHelpText = $state('')
+  let mountHelpVisible = $state(false)
 
   // Lost-mount detection compares only against snapshots taken during THIS
   // session, so pre-existing state at startup is never classified as a loss.
@@ -148,6 +172,7 @@
       backend: backends.includes(settings.defaultBackend) ? settings.defaultBackend : 'auto',
       readOnly: false,
       autoRemount: false,
+      temporaryFork: false,
       extraArgs: [],
       createdAt: now,
       updatedAt: now,
@@ -400,11 +425,56 @@
     return instance.mountPath.startsWith('/') || /^[A-Za-z]:[\\/]?$/.test(instance.mountPath) || /^[A-Za-z]:[\\/]/.test(instance.mountPath)
   }
 
+  async function toggleInstanceConfig(instance: MountInstance) {
+    if (instance.key in expandedConfig) {
+      const next = { ...expandedConfig }
+      delete next[instance.key]
+      expandedConfig = next
+      return
+    }
+    try {
+      const config = await getInstanceConfig(instance.mountPath)
+      expandedConfig = { ...expandedConfig, [instance.key]: config }
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Failed to read mount config', 'error')
+    }
+  }
+
+  async function openDashboard(instance: MountInstance, gui: boolean) {
+    try {
+      await launchDashboard(instance.mountPath, gui)
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Failed to launch dashboard', 'error')
+    }
+  }
+
+  async function toggleMountHelp() {
+    if (mountHelpVisible) {
+      mountHelpVisible = false
+      return
+    }
+    if (!mountHelpText) {
+      try {
+        mountHelpText = await mountHelp()
+      } catch (error) {
+        notify(error instanceof Error ? error.message : 'Failed to load mountos mount -h', 'error')
+        return
+      }
+    }
+    mountHelpVisible = true
+  }
+
   const navItems: Array<{ id: View; label: string; icon: typeof MonitorDot }> = [
     { id: 'instances', label: 'Instances', icon: MonitorDot },
     { id: 'profiles', label: 'Profiles', icon: HardDrive },
     { id: 'health', label: 'Health', icon: ShieldCheck },
     { id: 'settings', label: 'Settings', icon: Settings },
+  ]
+
+  const themeOptions: Array<{ value: Theme; label: string; icon: typeof Sun }> = [
+    { value: 'light', label: 'Light', icon: Sun },
+    { value: 'dark', label: 'Dark', icon: Moon },
+    { value: 'system', label: 'System', icon: Monitor },
   ]
 
   const backends = $derived<Backend[]>(
@@ -422,21 +492,36 @@
     return validateMountPathForBackend(selectedProfile.backend, selectedProfile.mountPath) ?? ''
   })
 
-  function initialDark() {
-    if (typeof localStorage === 'undefined') return false
-    const stored = localStorage.getItem('mountos-desktop-dark')
-    if (stored !== null) return stored === 'true'
-    return typeof matchMedia !== 'undefined' && matchMedia('(prefers-color-scheme: dark)').matches
-  }
-  let dark = $state(initialDark())
+  let theme = $state<Theme>(loadTheme())
 
-  function setDark(next: boolean) {
-    dark = next
-    if (typeof localStorage !== 'undefined') localStorage.setItem('mountos-desktop-dark', String(next))
+  function setTheme(next: Theme) {
+    theme = next
+    saveTheme(theme)
+  }
+
+  function initialSidebarCollapsed() {
+    if (typeof localStorage === 'undefined') return false
+    return localStorage.getItem('mountos-desktop-sidebar-collapsed') === 'true'
+  }
+  let sidebarCollapsed = $state(initialSidebarCollapsed())
+
+  function toggleSidebar() {
+    sidebarCollapsed = !sidebarCollapsed
+    if (typeof localStorage !== 'undefined') localStorage.setItem('mountos-desktop-sidebar-collapsed', String(sidebarCollapsed))
   }
 
   $effect(() => {
-    document.documentElement.classList.toggle('dark', dark)
+    applyTheme(theme)
+  })
+
+  $effect(() => {
+    if (typeof matchMedia === 'undefined') return
+    const query = matchMedia('(prefers-color-scheme: dark)')
+    const onChange = () => {
+      if (theme === 'system') applyTheme(theme)
+    }
+    query.addEventListener('change', onChange)
+    return () => query.removeEventListener('change', onChange)
   })
 
   async function loadSettings() {
@@ -463,6 +548,52 @@
       notify(trimmed ? 'New profiles default to this discovery URL' : 'Default discovery URL cleared')
     } catch (error) {
       notify(error instanceof Error ? error.message : 'Failed to save settings', 'error')
+    }
+  }
+
+  async function changeCliPathOverride(path: string) {
+    const trimmed = path.trim()
+    try {
+      settings = await saveSettings({ ...settings, cliPathOverride: trimmed || undefined })
+      notify(trimmed ? 'Pinned mountos CLI path' : 'CLI path pin cleared, using PATH lookup again')
+      await refresh(false)
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Failed to save settings', 'error')
+    }
+  }
+
+  async function checkMcpStatus() {
+    busy = true
+    try {
+      mcpStatusText = await mcpStatus()
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Failed to check MCP status', 'error')
+    } finally {
+      busy = false
+    }
+  }
+
+  async function installMcp() {
+    busy = true
+    try {
+      mcpStatusText = await mcpInstall()
+      notify('mountos registered as an MCP server')
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'MCP install failed', 'error')
+    } finally {
+      busy = false
+    }
+  }
+
+  async function uninstallMcp() {
+    busy = true
+    try {
+      mcpStatusText = await mcpUninstall()
+      notify('mountos MCP server removed')
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'MCP uninstall failed', 'error')
+    } finally {
+      busy = false
     }
   }
 
@@ -496,11 +627,11 @@
   <title>mountOS Desktop</title>
 </svelte:head>
 
-<div class="app-shell">
+<div class="app-shell" class:sidebar-collapsed={sidebarCollapsed}>
   <aside class="sidebar">
     <div class="brand">
       <img class="mark" src="/logo.png" alt="" width="36" height="36" />
-      <h1>mountOS Desktop</h1>
+      {#if !sidebarCollapsed}<h1>mountOS</h1>{/if}
     </div>
 
     <nav aria-label="Primary">
@@ -509,21 +640,24 @@
           class:active={view === item.id}
           class="nav-btn"
           type="button"
+          title={sidebarCollapsed ? item.label : undefined}
           aria-current={view === item.id ? 'page' : undefined}
           onclick={() => (view = item.id)}
         >
           <item.icon size={18} aria-hidden="true" />
-          <span>{item.label}</span>
+          {#if !sidebarCollapsed}<span>{item.label}</span>{/if}
         </button>
       {/each}
+      <button class="nav-btn" type="button" title={sidebarCollapsed ? 'Expand sidebar' : undefined} onclick={toggleSidebar}>
+        {#if sidebarCollapsed}<PanelLeftOpen size={18} aria-hidden="true" />{:else}<PanelLeftClose size={18} aria-hidden="true" />{/if}
+        {#if !sidebarCollapsed}<span>Collapse</span>{/if}
+      </button>
     </nav>
 
-    <div class="sidebar-footer">
-      <span class="badge {systemState.checkOk ? 'success' : 'warning'}">
-        {#if systemState.checkOk}<CheckCircle2 size={14} aria-hidden="true" />{:else}<AlertTriangle size={14} aria-hidden="true" />{/if}
-        {systemState.cliVersion ?? 'CLI pending'}
-      </span>
-    </div>
+    <button class="sidebar-footer" type="button" title="mountOS CLI status, see Settings for details" onclick={() => (view = 'settings')}>
+      <span class="led" class:warning={!systemState.checkOk}></span>
+      {#if !sidebarCollapsed}<span>{systemState.checkOk ? 'CLI ready' : 'CLI issue'}</span>{/if}
+    </button>
   </aside>
 
   <main class="main" aria-busy={busy}>
@@ -537,7 +671,7 @@
             <input bind:value={query} placeholder="Filter mounts" />
           </label>
         {/if}
-        <button class="btn icon-btn" type="button" title="Refresh" aria-label="Refresh" onclick={() => refresh()} disabled={busy}>
+        <button class="btn icon-btn ghost" type="button" title="Refresh" aria-label="Refresh" onclick={() => refresh()} disabled={busy}>
           <span class="refresh-icon" class:spin={busy}><RefreshCw size={17} aria-hidden="true" /></span>
         </button>
         <button class="btn primary" type="button" onclick={() => newProfile()} disabled={busy}>
@@ -601,6 +735,19 @@
                   <td>{@render HealthBadge(instance.health)}</td>
                   <td>
                     <div class="row-actions">
+                      {#if canOpen(instance)}
+                        <button
+                          class="btn icon-btn"
+                          type="button"
+                          title={instance.key in expandedConfig ? 'Hide mount flags' : 'Show mount flags'}
+                          aria-label={instance.key in expandedConfig ? 'Hide mount flags' : 'Show mount flags'}
+                          aria-expanded={instance.key in expandedConfig}
+                          disabled={busy}
+                          onclick={() => toggleInstanceConfig(instance)}
+                        >
+                          {#if instance.key in expandedConfig}<ChevronDown size={16} aria-hidden="true" />{:else}<ChevronRight size={16} aria-hidden="true" />{/if}
+                        </button>
+                      {/if}
                       <button
                         class="btn icon-btn"
                         type="button"
@@ -611,6 +758,14 @@
                       >
                         <FolderOpen size={16} aria-hidden="true" />
                       </button>
+                      {#if canOpen(instance)}
+                        <button class="btn icon-btn" type="button" title="Launch TUI dashboard in a terminal" aria-label="Launch TUI dashboard" disabled={busy} onclick={() => openDashboard(instance, false)}>
+                          <SquareTerminal size={16} aria-hidden="true" />
+                        </button>
+                        <button class="btn icon-btn" type="button" title="Launch GUI dashboard in a terminal" aria-label="Launch GUI dashboard" disabled={busy} onclick={() => openDashboard(instance, true)}>
+                          <LayoutDashboard size={16} aria-hidden="true" />
+                        </button>
+                      {/if}
                       {#if instance.external && canOpen(instance)}
                         <button class="btn icon-btn" type="button" title="Save as profile" aria-label="Save as profile" disabled={busy} onclick={() => saveAsProfile(instance)}>
                           <FilePlus size={16} aria-hidden="true" />
@@ -622,12 +777,22 @@
                     </div>
                   </td>
                 </tr>
+                {#if instance.key in expandedConfig}
+                  <tr class="config-row">
+                    <td colspan="5">
+                      <div class="command-preview">
+                        <p class="mono-label">MOUNT FLAGS (.mountOS/.config)</p>
+                        <pre><code>{expandedConfig[instance.key]}</code></pre>
+                      </div>
+                    </td>
+                  </tr>
+                {/if}
               {:else}
                 <tr>
                   <td colspan="5">
                     <div class="empty tech-grid">
                       <strong>No instances</strong>
-                      <p>Mount a saved profile, or mount from the CLI; same-user mounts appear here after refresh.</p>
+                      <p>Mount a saved profile, or mount from the CLI; active mounts appear here after refresh.</p>
                     </div>
                   </td>
                 </tr>
@@ -650,6 +815,10 @@
                   <small>{profile.mountPath || 'No target selected'}</small>
                 </span>
               </button>
+            {:else}
+              <div class="empty">
+                <p>No saved profiles yet.</p>
+              </div>
             {/each}
           </div>
         </div>
@@ -753,12 +922,32 @@
 
             <div class="toggles">
               <label><input type="checkbox" checked={selectedProfile.readOnly} onchange={(e) => patchProfile({ readOnly: e.currentTarget.checked })} /> Read only</label>
+              <label title="Creates an ephemeral per-session fork for this mount; discarded when it unmounts, the underlying volume is never touched">
+                <input type="checkbox" checked={selectedProfile.temporaryFork} onchange={(e) => patchProfile({ temporaryFork: e.currentTarget.checked })} /> Temporary fork
+              </label>
             </div>
 
             <label class="field">
-              <span>Extra args</span>
-              <textarea class="textarea" value={extraArgsInput} oninput={(e) => setExtraArgs(e.currentTarget.value)} placeholder="Only unmanaged mount flags"></textarea>
+              <div class="field-head">
+                <span>Advanced options</span>
+                <button class="btn ghost small" type="button" onclick={toggleMountHelp} disabled={busy}>
+                  {mountHelpVisible ? 'Hide help' : 'mountos mount -h'}
+                </button>
+              </div>
+              <textarea
+                class="textarea"
+                value={extraArgsInput}
+                oninput={(e) => setExtraArgs(e.currentTarget.value)}
+                placeholder="Flags mountos mount accepts but this form doesn't manage, e.g. --disk-cache-size 10G"
+              ></textarea>
             </label>
+
+            {#if mountHelpVisible}
+              <div class="command-preview">
+                <p class="mono-label">MOUNTOS MOUNT -H</p>
+                <pre><code>{mountHelpText}</code></pre>
+              </div>
+            {/if}
 
             {#if extraArgsError}
               <div class="callout warning">
@@ -779,6 +968,16 @@
               <code>{commandText || `mountos ${buildMountArgv(selectedProfile).join(' ')}`}</code>
             </div>
           </form>
+        {:else}
+          <div class="surface panel empty tech-grid profile-empty">
+            <FilePlus size={28} aria-hidden="true" />
+            <strong>No profile selected</strong>
+            <p>Save a profile to mount a mountOS volume in one click, with credentials in the OS vault and the exact CLI command shown before every action.</p>
+            <button class="btn primary" type="button" onclick={() => newProfile()}>
+              <Plus size={17} aria-hidden="true" />
+              New profile
+            </button>
+          </div>
         {/if}
       </section>
     {:else if view === 'health'}
@@ -786,6 +985,10 @@
         <div class="panel-head">
           <h3>Backend readiness</h3>
           <div class="row-actions">
+            <button class="btn" type="button" onclick={() => refresh()} disabled={busy} title="Re-run mountos check --json">
+              <RefreshCw size={16} aria-hidden="true" />
+              Run check
+            </button>
             <button class="btn" type="button" onclick={createBundle} disabled={busy}>
               <FileArchive size={16} aria-hidden="true" />
               Bundle
@@ -820,26 +1023,97 @@
     {:else}
       <section class="surface panel settings-panel">
         <h3>Desktop policies</h3>
+        <div class="setting-row">
+          <span><strong>Theme</strong>{@render Hint('Follows the system appearance until you pick Light or Dark.')}</span>
+          <div class="theme-switch" role="group" aria-label="Theme">
+            {#each themeOptions as option (option.value)}
+              <button
+                class="btn theme-btn"
+                class:active={theme === option.value}
+                type="button"
+                aria-pressed={theme === option.value}
+                onclick={() => setTheme(option.value)}
+              >
+                <option.icon size={15} aria-hidden="true" />
+                {option.label}
+              </button>
+            {/each}
+          </div>
+        </div>
         <label class="setting-row">
-          <span><strong>Dark mode</strong><small>Low-light console palette. Follows the system setting until you choose.</small></span>
-          <input type="checkbox" checked={dark} onchange={(e) => setDark(e.currentTarget.checked)} />
-        </label>
-        <label class="setting-row">
-          <span><strong>Default backend</strong><small>Applied to new profiles. Auto follows the CLI's platform order.</small></span>
+          <span><strong>Default backend</strong>{@render Hint("Applied to new profiles. Auto follows the CLI's platform order.")}</span>
           <select class="select setting-select" value={settings.defaultBackend} onchange={(e) => changeDefaultBackend(e.currentTarget.value as Backend)}>
             {#each backends as backend}<option value={backend}>{backend}</option>{/each}
           </select>
         </label>
-        <label class="setting-row">
-          <span><strong>Default discovery URL</strong><small>Seeds new profiles. Each profile can still override it individually; existing profiles are never rewritten when this changes.</small></span>
+        <label class="setting-row stacked">
+          <span><strong>Default discovery URL</strong>{@render Hint('Seeds new profiles. Each profile can still override it individually; existing profiles are never rewritten when this changes.')}</span>
           <input
-            class="input setting-select"
+            class="input"
             type="text"
             placeholder="https://hub.example.com"
             value={settings.defaultDiscoveryUrl ?? ''}
             onchange={(e) => changeDefaultDiscoveryUrl(e.currentTarget.value)}
           />
         </label>
+      </section>
+
+      <section class="surface panel settings-panel">
+        <h3>About mountOS</h3>
+        <div class="setting-row">
+          <span><strong>Platform</strong></span>
+          <span class="mono-label">{systemState.platform}</span>
+        </div>
+        <div class="setting-row">
+          <span><strong>CLI version</strong></span>
+          <span class="mono-label">{systemState.cliVersion ?? 'unavailable'}</span>
+        </div>
+        <div class="setting-row">
+          <span><strong>CLI path</strong></span>
+          <code>{systemState.cliPath ?? 'not found on PATH'}</code>
+        </div>
+
+        {#if systemState.cliPathAlternates.length}
+          <div class="callout warning">
+            <AlertTriangle size={17} aria-hidden="true" />
+            <span>
+              {systemState.cliPathAlternates.length} other mountos {systemState.cliPathAlternates.length === 1 ? 'binary was' : 'binaries were'} found on PATH and ignored:
+              {systemState.cliPathAlternates.join(', ')}. Pin the one you want below to stop relying on PATH order.
+            </span>
+          </div>
+        {/if}
+
+        <label class="setting-row stacked">
+          <span><strong>Pin CLI path</strong>{@render Hint('Overrides the PATH lookup with this exact binary. Leave empty to use the first mountos found on PATH.')}</span>
+          <input
+            class="input"
+            type="text"
+            placeholder={systemState.cliPath ?? '/usr/local/bin/mountos'}
+            value={settings.cliPathOverride ?? ''}
+            onchange={(e) => changeCliPathOverride(e.currentTarget.value)}
+          />
+        </label>
+      </section>
+
+      <section class="surface panel settings-panel">
+        <div class="panel-head">
+          <h3 class="h3-icon"><Bot size={19} aria-hidden="true" /> MCP for AI agents</h3>
+          <div class="row-actions">
+            <button class="btn" type="button" onclick={checkMcpStatus} disabled={busy}>
+              <RefreshCw size={16} aria-hidden="true" />
+              Check status
+            </button>
+            <button class="btn" type="button" onclick={installMcp} disabled={busy}>Install</button>
+            <button class="btn destructive" type="button" onclick={uninstallMcp} disabled={busy}>Uninstall</button>
+          </div>
+        </div>
+        <p>Registers this mountos binary as a read-only Model Context Protocol server for Claude Desktop, Claude Code, Codex and Gemini, so an AI agent can inspect mounts, stats and diagnostics without file access.</p>
+        {#if mcpStatusText}
+          <div class="command-preview">
+            <p class="mono-label">MCP STATUS</p>
+            <pre><code>{mcpStatusText}</code></pre>
+          </div>
+        {/if}
       </section>
     {/if}
   </main>
@@ -886,10 +1160,14 @@
 </dialog>
 
 {#snippet HealthBadge(health: string)}
-  <span class="badge {health === 'healthy' ? 'success' : health === 'lost' ? 'destructive' : health === 'limited' || health === 'launching' ? 'warning' : ''}">
-    <span class="led {health === 'lost' ? 'destructive' : health === 'limited' || health === 'launching' ? 'warning' : ''}" aria-hidden="true"></span>
+  <span class="badge {healthTone(health)}">
+    <span class="led {healthTone(health)}" aria-hidden="true"></span>
     {health}
   </span>
+{/snippet}
+
+{#snippet Hint(text: string)}
+  <small class="hint"><Lightbulb size={13} aria-hidden="true" />{text}</small>
 {/snippet}
 
 <style>
@@ -898,11 +1176,16 @@
     align-items: center;
     gap: 12px;
     padding: 18px 16px;
-    border-bottom: 1px solid var(--border);
+  }
+
+  .app-shell.sidebar-collapsed .brand {
+    justify-content: center;
+    padding-inline: 0;
   }
 
   .brand h1 {
     font-size: 1.25rem;
+    white-space: nowrap;
   }
 
   .mark {
@@ -935,8 +1218,16 @@
     text-align: left;
   }
 
+  .app-shell.sidebar-collapsed .nav-btn {
+    justify-content: center;
+    padding-inline: 0;
+  }
+
   .nav-btn:hover,
-  .nav-btn.active,
+  .nav-btn.active {
+    background: var(--accent);
+  }
+
   .profile-row:hover,
   .profile-row.active {
     border-color: var(--border);
@@ -944,16 +1235,42 @@
   }
 
   .sidebar-footer {
-    padding: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    margin-top: auto;
+    border: none;
+    border-top: 1px solid var(--border);
+    background: transparent;
+    color: var(--muted-foreground);
+    font-size: 1rem;
+    cursor: pointer;
+    padding: 12px 16px;
+    text-align: left;
+  }
+
+  .sidebar-footer:hover {
+    background: var(--accent);
+    color: var(--foreground);
+  }
+
+  .app-shell.sidebar-collapsed .sidebar-footer {
+    justify-content: center;
+    padding-inline: 0;
   }
 
   .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 10;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 16px;
     padding: 18px 22px;
     border-bottom: 1px solid var(--border);
+    background: var(--background);
   }
 
   .topbar h2 {
@@ -1046,6 +1363,12 @@
     font-size: 1.25rem;
   }
 
+  .h3-icon {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
   .table-wrap {
     overflow: auto;
   }
@@ -1062,6 +1385,23 @@
     gap: 6px;
     padding: 28px;
     text-align: center;
+  }
+
+  .profile-empty {
+    justify-items: center;
+    align-content: center;
+    gap: 12px;
+    min-height: 320px;
+    margin: 0;
+    color: var(--muted-foreground);
+  }
+
+  .profile-empty p {
+    max-width: 46ch;
+  }
+
+  .profile-empty .btn {
+    margin-top: 8px;
   }
 
   .profiles-layout {
@@ -1122,6 +1462,26 @@
     font-weight: 500;
   }
 
+  .field-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .field-head span {
+    color: var(--label-foreground);
+    font-size: 1rem;
+    font-weight: 500;
+  }
+
+  .btn.small {
+    min-height: 28px;
+    padding: 4px 10px;
+    font-size: 0.875rem;
+    font-family: ui-monospace, Menlo, monospace;
+  }
+
   .toggles {
     display: flex;
     gap: 18px;
@@ -1137,6 +1497,30 @@
     gap: 16px;
   }
 
+  .setting-row.stacked {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .setting-row.stacked .input {
+    width: 100%;
+  }
+
+  .theme-switch {
+    display: flex;
+    gap: 6px;
+  }
+
+  .theme-btn.active {
+    border-color: var(--primary);
+    background: var(--primary);
+    color: var(--primary-foreground);
+  }
+
+  .theme-btn.active:hover {
+    background: oklch(from var(--primary) l c h / 0.9);
+  }
+
   .save-secret {
     justify-content: flex-start;
   }
@@ -1144,6 +1528,20 @@
   .setting-row > span {
     display: grid;
     gap: 2px;
+  }
+
+  .hint {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    color: var(--muted-foreground);
+    font-size: 1rem;
+  }
+
+  .hint :global(svg) {
+    flex-shrink: 0;
+    margin-top: 2px;
+    color: var(--warning);
   }
 
   .setting-select {
@@ -1185,6 +1583,21 @@
     border: 1px solid var(--border);
     background: var(--muted);
     padding: 12px;
+  }
+
+  .command-preview pre {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .config-row td {
+    background: var(--muted);
+    padding-top: 0;
+  }
+
+  .config-row .command-preview {
+    background: var(--card);
   }
 
   .issue-list {

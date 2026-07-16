@@ -16,6 +16,7 @@ const profile: MountProfile = {
   backend: 'nfs',
   readOnly: true,
   autoRemount: false,
+  temporaryFork: false,
   extraArgs: ['--cache-size', '10G'],
   createdAt: '2026-07-10T00:00:00Z',
   updatedAt: '2026-07-10T00:00:00Z',
@@ -52,6 +53,11 @@ describe('cli helpers', () => {
   it('omits -m for FileProvider/CloudFilter even with a leftover mountPath', () => {
     const argv = buildMountArgv({ ...profile, backend: 'fileprovider', mountPath: '/some/leftover/path' })
     expect(argv).not.toContain('-m')
+  })
+
+  it('adds --temporary-fork when enabled', () => {
+    expect(buildMountArgv({ ...profile, temporaryFork: true })).toContain('--temporary-fork')
+    expect(buildMountArgv({ ...profile, temporaryFork: false })).not.toContain('--temporary-fork')
   })
 
   it('rejects managed extra args and duplicate positionals', () => {

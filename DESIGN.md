@@ -243,6 +243,7 @@ All utilities live in `src/app.css`.
 
 ### Sanctioned patterns (NOT "decorative gradients")
 - Corner-bracket marks, the LED pulse, and the brand mark's clip-path chamfer are structural signature, keep them.
+- `.btn.primary`'s clip-path chamfer (`polygon(0 12px, 12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%)`), a steeper variant of the brand mark's 8px cut, proportionate to the button's larger size. Every primary CTA carries it, not a one-off; consistent component vocabulary across the surface.
 - `.tech-grid`, the dual `linear-gradient` 20px grid backdrop on empty states. Brand backdrop, keep.
 - `.skeleton`, the opacity-pulse loading placeholder (no shimmer gradient); collapses under reduced motion.
 - Any NEW gradient, glow, or clip-path must earn an explicit entry here. Default-deny.

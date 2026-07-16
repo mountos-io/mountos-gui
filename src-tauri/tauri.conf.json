@@ -13,11 +13,27 @@
     "withGlobalTauri": false,
     "windows": [
       {
+        "label": "main",
         "title": "mountOS Desktop",
         "width": 1180,
         "height": 760,
         "minWidth": 860,
-        "minHeight": 560
+        "minHeight": 560,
+        "backgroundColor": "#f3efe0"
+      },
+      {
+        "label": "tray-popover",
+        "url": "index.html?tray=1",
+        "title": "mountOS",
+        "width": 340,
+        "height": 420,
+        "resizable": false,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "shadow": true,
+        "visible": false,
+        "backgroundColor": "#f3efe0"
       }
     ],
     "security": {

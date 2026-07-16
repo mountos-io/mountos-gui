@@ -36,6 +36,7 @@ const managedFlags = new Set([
   'smb',
   'fileprovider',
   'F',
+  'temporary-fork',
 ])
 
 // gateway-* flags are deliberately excluded: validateExtraArgs rejects any
@@ -137,6 +138,7 @@ export function buildMountArgv(profile: MountProfile): string[] {
   if (backendNeedsMountPath(profile.backend) && profile.mountPath) argv.push('-m', profile.mountPath)
   if (profile.accessKeyId) argv.push('-a', profile.accessKeyId, '-s')
   if (profile.readOnly) argv.push('--read-only')
+  if (profile.temporaryFork) argv.push('--temporary-fork')
   if (profile.cacheDir) argv.push('--disk-cache-dir', profile.cacheDir)
 
   const backend = backendArgv[profile.backend]

@@ -98,7 +98,6 @@ body {
   letter-spacing: -0.01em;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
 }
 
 button,
@@ -144,16 +143,65 @@ p {
   min-height: 100%;
   background: var(--background);
   color: var(--foreground);
+  transition: grid-template-columns 200ms ease-out;
+}
+
+.app-shell.sidebar-collapsed {
+  grid-template-columns: 4.5rem 1fr;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell {
+    transition: none;
+  }
 }
 
 .sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
   border-right: 1px solid var(--border);
   background: var(--card);
+  overflow: hidden;
 }
 
 .main {
   min-width: 0;
   overflow: auto;
+}
+
+.main,
+.table-wrap,
+.list {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+.main::-webkit-scrollbar,
+.table-wrap::-webkit-scrollbar,
+.list::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.main::-webkit-scrollbar-track,
+.table-wrap::-webkit-scrollbar-track,
+.list::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+.main::-webkit-scrollbar-thumb,
+.table-wrap::-webkit-scrollbar-thumb,
+.list::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 4px;
+}
+
+.main::-webkit-scrollbar-thumb:hover,
+.table-wrap::-webkit-scrollbar-thumb:hover,
+.list::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb);
+  opacity: 0.8;
 }
 
 .surface {
@@ -211,6 +259,8 @@ p {
   border-color: var(--primary);
   background: var(--primary);
   color: var(--primary-foreground);
+  /* Steeper variant of the brand mark's chamfer (structural signature, DESIGN.md §5) */
+  clip-path: polygon(0 12px, 12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%);
 }
 
 .btn.primary:hover {
@@ -349,24 +399,24 @@ p {
 .corner-brackets::after {
   content: "";
   position: absolute;
-  width: 16px;
-  height: 16px;
+  width: 22px;
+  height: 22px;
   pointer-events: none;
-  opacity: 0.45;
+  opacity: 0.85;
 }
 
 .corner-brackets::before {
-  left: -1px;
-  top: -1px;
-  border-left: 1.5px solid var(--ring);
-  border-top: 1.5px solid var(--ring);
+  left: -2px;
+  top: -2px;
+  border-left: 2px solid var(--ring);
+  border-top: 2px solid var(--ring);
 }
 
 .corner-brackets::after {
-  right: -1px;
-  bottom: -1px;
-  border-right: 1.5px solid var(--ring);
-  border-bottom: 1.5px solid var(--ring);
+  right: -2px;
+  bottom: -2px;
+  border-right: 2px solid var(--ring);
+  border-bottom: 2px solid var(--ring);
 }
 
 /* Sanctioned pattern (DESIGN.md §5): dual-gradient 20px grid backdrop for

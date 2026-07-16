@@ -5,13 +5,18 @@ use std::{
     collections::HashSet,
     fs,
     io::Write,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
-    sync::OnceLock,
+    sync::{Mutex, OnceLock},
     thread,
     time::{Duration, Instant},
 };
-use tauri::{AppHandle, Manager};
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    AppHandle, Manager, WindowEvent,
+};
+use tauri_plugin_positioner::{Position, WindowExt};
 
 #[derive(Debug, thiserror::Error)]
 enum DesktopError {
@@ -68,6 +73,11 @@ struct MountProfile {
     cache_dir: Option<String>,
     read_only: bool,
     auto_remount: bool,
+    // Added after the original schema; #[serde(default)] so profiles saved
+    // before this field existed still deserialize (bool has no implicit
+    // default the way Option<T> does).
+    #[serde(default)]
+    temporary_fork: bool,
     trusted_discovery_host: Option<String>,
     extra_args: Vec<String>,
     created_at: String,
@@ -111,6 +121,10 @@ struct SystemState {
     check_ok: bool,
     issues: Vec<CheckIssue>,
     instances: Vec<MountInstance>,
+    // Other mountos binaries found on PATH besides the one actually in use
+    // (empty when there's exactly one, the common case). Surfaces ambiguity
+    // instead of silently trusting whichever which() happened to resolve.
+    cli_path_alternates: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -139,6 +153,10 @@ struct DesktopSettings {
     // rewritten when this changes. Option<T> deserializes missing older
     // settings.json files (pre-dating this field) as None automatically.
     default_discovery_url: Option<String>,
+    // Pins an exact mountos binary instead of the first PATH match. Once
+    // set, a moved/missing pinned binary is a hard error (see
+    // mountos_path) rather than a silent fallback to a different install.
+    cli_path_override: Option<String>,
 }
 
 impl Default for DesktopSettings {
@@ -146,6 +164,7 @@ impl Default for DesktopSettings {
         Self {
             default_backend: Backend::Auto,
             default_discovery_url: None,
+            cli_path_override: None,
         }
     }
 }
@@ -190,8 +209,54 @@ fn read_profile_secret(
     Ok(None)
 }
 
+static CLI_PATH_OVERRIDE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+
+fn cli_path_override_cell() -> &'static Mutex<Option<PathBuf>> {
+    CLI_PATH_OVERRIDE.get_or_init(|| Mutex::new(None))
+}
+
+// Populated from DesktopSettings.cli_path_override whenever settings are
+// read or saved (get_settings/save_settings), not read from disk on every
+// mountos_path() call. There is a small startup race: the very first
+// get_system_state poll can land before the frontend's initial
+// loadSettings() call finishes, using the plain PATH lookup for one cycle.
+// Self-corrects on the next poll (5s) and every settings.json write races
+// nothing since it happens strictly after this function is populated.
+fn set_cli_path_override(path: Option<PathBuf>) {
+    *cli_path_override_cell().lock().unwrap_or_else(|e| e.into_inner()) = path;
+}
+
+fn cli_path_override() -> Option<PathBuf> {
+    cli_path_override_cell().lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
 fn mountos_path() -> Result<PathBuf, DesktopError> {
+    if let Some(pinned) = cli_path_override() {
+        return if pinned.is_file() {
+            Ok(pinned)
+        } else {
+            // Fail loudly rather than silently falling back to a different
+            // PATH match — that would defeat the point of pinning a path.
+            Err(DesktopError::Message(format!(
+                "pinned CLI path no longer exists: {}",
+                pinned.display()
+            )))
+        };
+    }
     which::which("mountos").map_err(|_| DesktopError::CliNotFound)
+}
+
+// Every mountos binary on PATH other than the one actually in use. which
+// 8.0.4's which_all() walks the full PATH; used to warn about ambiguous
+// installs (e.g. a stale dev build shadowing a real one) rather than
+// silently trusting whichever happens to resolve first.
+fn other_cli_paths_on_path(resolved: Option<&Path>) -> Vec<String> {
+    let Ok(all) = which::which_all("mountos") else {
+        return Vec::new();
+    };
+    all.filter(|p| resolved.is_none_or(|r| p != r))
+        .map(|p| p.display().to_string())
+        .collect()
 }
 
 fn profile_dir(app: &AppHandle) -> Result<PathBuf, DesktopError> {
@@ -270,6 +335,7 @@ fn managed_flags() -> HashSet<&'static str> {
         "smb",
         "fileprovider",
         "F",
+        "temporary-fork",
     ]
     .into_iter()
     .collect()
@@ -381,6 +447,9 @@ fn build_mount_argv(profile: &MountProfile) -> Vec<String> {
     }
     if profile.read_only {
         argv.push("--read-only".to_string());
+    }
+    if profile.temporary_fork {
+        argv.push("--temporary-fork".to_string());
     }
     if let Some(cache_dir) = &profile.cache_dir {
         if !cache_dir.is_empty() {
@@ -586,6 +655,76 @@ fn runtime_dir(app: &AppHandle) -> Result<PathBuf, DesktopError> {
     let dir = app.path().app_cache_dir()?.join("runtime");
     fs::create_dir_all(&dir)?;
     Ok(dir)
+}
+
+// Raw plain-text output from `mountos mcp <sub>`, trimmed. Per-client status
+// shapes vary too much to usefully parse ("registered but stale" vs "CLI
+// present, check with `claude mcp list`"), and showing the exact CLI output
+// matches this app's own convention of never obscuring what the CLI said.
+fn mcp_subcommand_output(sub: &str) -> Result<String, DesktopError> {
+    let output = command_output(&["mcp", sub])?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{stdout}\n{stderr}").trim().to_string();
+    if !output.status.success() && combined.is_empty() {
+        return Err(DesktopError::Message(format!(
+            "mountos mcp {sub} exited with {}",
+            output.status
+        )));
+    }
+    Ok(combined)
+}
+
+fn mcp_status_blocking() -> Result<String, DesktopError> {
+    mcp_subcommand_output("status")
+}
+
+fn mcp_install_blocking() -> Result<String, DesktopError> {
+    mcp_subcommand_output("install")
+}
+
+fn mcp_uninstall_blocking() -> Result<String, DesktopError> {
+    mcp_subcommand_output("uninstall")
+}
+
+#[tauri::command]
+async fn mcp_status() -> Result<String, DesktopError> {
+    tauri::async_runtime::spawn_blocking(mcp_status_blocking)
+        .await
+        .map_err(|error| DesktopError::Message(format!("mcp status task failed: {error}")))?
+}
+
+#[tauri::command]
+async fn mcp_install() -> Result<String, DesktopError> {
+    tauri::async_runtime::spawn_blocking(mcp_install_blocking)
+        .await
+        .map_err(|error| DesktopError::Message(format!("mcp install task failed: {error}")))?
+}
+
+fn mount_help_blocking() -> Result<String, DesktopError> {
+    let output = command_output(&["mount", "-h"])?;
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if text.is_empty() {
+        return Err(DesktopError::Message(format!(
+            "mountos mount -h exited with {}",
+            output.status
+        )));
+    }
+    Ok(text)
+}
+
+#[tauri::command]
+async fn mount_help() -> Result<String, DesktopError> {
+    tauri::async_runtime::spawn_blocking(mount_help_blocking)
+        .await
+        .map_err(|error| DesktopError::Message(format!("mount help task failed: {error}")))?
+}
+
+#[tauri::command]
+async fn mcp_uninstall() -> Result<String, DesktopError> {
+    tauri::async_runtime::spawn_blocking(mcp_uninstall_blocking)
+        .await
+        .map_err(|error| DesktopError::Message(format!("mcp uninstall task failed: {error}")))?
 }
 
 fn cli_version() -> Option<String> {
@@ -851,21 +990,31 @@ fn settings_path(app: &AppHandle) -> Result<PathBuf, DesktopError> {
 
 #[tauri::command]
 fn get_settings(app: AppHandle) -> Result<DesktopSettings, DesktopError> {
-    match fs::read(settings_path(&app)?) {
-        Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(DesktopSettings::default()),
-        Err(err) => Err(err.into()),
-    }
+    let settings = match fs::read(settings_path(&app)?) {
+        Ok(bytes) => serde_json::from_slice(&bytes)?,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => DesktopSettings::default(),
+        Err(err) => return Err(err.into()),
+    };
+    set_cli_path_override(settings.cli_path_override.as_ref().map(PathBuf::from));
+    Ok(settings)
 }
 
 #[tauri::command]
 fn save_settings(app: AppHandle, settings: DesktopSettings) -> Result<DesktopSettings, DesktopError> {
     validate_backend_for_platform(&settings.default_backend)?;
+    if let Some(pinned) = &settings.cli_path_override {
+        if !PathBuf::from(pinned).is_file() {
+            return Err(DesktopError::Message(format!(
+                "not a file: {pinned}"
+            )));
+        }
+    }
     let path = settings_path(&app)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     fs::write(path, serde_json::to_vec_pretty(&settings)?)?;
+    set_cli_path_override(settings.cli_path_override.as_ref().map(PathBuf::from));
     Ok(settings)
 }
 
@@ -991,6 +1140,21 @@ fn get_system_state_blocking(app: AppHandle) -> Result<SystemState, DesktopError
     let check_output = command_output(&["check", "--json"]);
     let (mut check_ok, mut issues) = match check_output {
         Ok(output) => parse_check(&output),
+        Err(DesktopError::CliNotFound) => (
+            false,
+            vec![CheckIssue {
+                id: "cli-missing".to_string(),
+                severity: "error".to_string(),
+                title: "mountos binary not found".to_string(),
+                detail: Some(
+                    "No mountos binary was found on PATH. Install the mountos CLI, or if it's \
+                     already installed somewhere non-standard, pin its exact path under \
+                     Settings \u{2192} About."
+                        .to_string(),
+                ),
+                fix_command: None,
+            }],
+        ),
         Err(err) => (
             false,
             vec![CheckIssue {
@@ -1028,6 +1192,7 @@ fn get_system_state_blocking(app: AppHandle) -> Result<SystemState, DesktopError
             .iter()
             .any(|target| targets_equal(target, &instance.mount_path));
     }
+    let cli_path_alternates = other_cli_paths_on_path(cli_path.as_deref());
     Ok(SystemState {
         platform: match std::env::consts::OS {
             "macos" => "macos",
@@ -1040,6 +1205,7 @@ fn get_system_state_blocking(app: AppHandle) -> Result<SystemState, DesktopError
         check_ok,
         issues,
         instances,
+        cli_path_alternates,
     })
 }
 
@@ -1211,6 +1377,176 @@ async fn unmount_target(target: String) -> Result<UnmountResult, DesktopError> {
         .map_err(|error| DesktopError::Message(format!("unmount task failed: {error}")))?
 }
 
+// Reads .mountOS/.config directly off disk rather than shelling out — it's
+// a plain JSON file the mfuse process already writes for its own TUI/CLI
+// tooling (cmd/mfuse/reserved.go getConfigData), so no extra CLI round
+// trip is needed. Scrubbing is unnecessary: MountConfig carries the access
+// key ID (a public 20-char identifier) but never the secret.
+#[tauri::command]
+fn get_instance_config(target: String) -> Result<String, DesktopError> {
+    if !is_openable_target(&target) {
+        return Err(DesktopError::Message(
+            "mount target is not an absolute filesystem path".to_string(),
+        ));
+    }
+    if !list_contains_target(&target)? {
+        return Err(DesktopError::Message(
+            "refusing to read config for a path that is not an active mount target".to_string(),
+        ));
+    }
+    let config_path = PathBuf::from(&target).join(".mountOS").join(".config");
+    let bytes = fs::read(&config_path).map_err(|err| {
+        DesktopError::Message(format!(
+            "failed to read {}: {err}",
+            config_path.display()
+        ))
+    })?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+    Ok(serde_json::to_string_pretty(&value)?)
+}
+
+// POSIX single-quote wrap: closes the quote, emits an escaped literal quote,
+// reopens it. Safe for any byte sequence, including embedded quotes.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+// AppleScript double-quoted string literal escaping (backslash and quote).
+#[cfg(target_os = "macos")]
+fn applescript_quote(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+// Launches the platform's terminal running `mountos dashboard [--gui]
+// <target>`, left open afterward exactly like a terminal the user opened
+// themselves (Terminal.app's `do script` and `cmd /k` both do this
+// natively; the Linux fallback re-execs the shell to match).
+#[cfg(target_os = "macos")]
+fn spawn_dashboard_terminal(mountos: &Path, target: &str, gui: bool) -> Result<(), DesktopError> {
+    let mut shell_cmd = shell_quote(&mountos.display().to_string());
+    shell_cmd.push_str(" dashboard");
+    if gui {
+        shell_cmd.push_str(" --gui");
+    }
+    shell_cmd.push(' ');
+    shell_cmd.push_str(&shell_quote(target));
+
+    let script = format!(
+        "tell application \"Terminal\"\n  activate\n  do script {}\nend tell",
+        applescript_quote(&shell_cmd)
+    );
+    // .output(), not .spawn(): `do script` is a synchronous AppleEvent that
+    // returns once Terminal has started the command (not once the command
+    // finishes), so this doesn't block on the dashboard session itself —
+    // but it DOES need to be awaited to catch a real failure, most notably
+    // "AppleEvent timed out" (-1712) when this app hasn't been granted
+    // Automation permission for Terminal yet (System Settings > Privacy &
+    // Security > Automation). A bare .spawn() would silently report success
+    // even when osascript itself failed.
+    let output = Command::new("osascript").arg("-e").arg(script).output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(DesktopError::Message(if stderr.contains("-1712") {
+            "macOS blocked mountOS Desktop from controlling Terminal. Grant it in System \
+             Settings \u{2192} Privacy & Security \u{2192} Automation, then try again."
+                .to_string()
+        } else if stderr.is_empty() {
+            format!("osascript exited with {}", output.status)
+        } else {
+            stderr
+        }));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn spawn_dashboard_terminal(mountos: &Path, target: &str, gui: bool) -> Result<(), DesktopError> {
+    let mut args: Vec<String> = vec!["dashboard".to_string()];
+    if gui {
+        args.push("--gui".to_string());
+    }
+    args.push(target.to_string());
+
+    // Prefer Windows Terminal (the Win11 default host) when installed; cmd
+    // /k always works and, like Terminal.app's do script, keeps the window
+    // open after the command finishes.
+    if let Ok(wt) = which::which("wt") {
+        Command::new(wt)
+            .arg("new-tab")
+            .arg("cmd")
+            .arg("/k")
+            .arg(mountos)
+            .args(&args)
+            .spawn()?;
+    } else {
+        Command::new("cmd")
+            .arg("/k")
+            .arg(mountos)
+            .args(&args)
+            .spawn()?;
+    }
+    Ok(())
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn spawn_dashboard_terminal(mountos: &Path, target: &str, gui: bool) -> Result<(), DesktopError> {
+    let mut shell_cmd = shell_quote(&mountos.display().to_string());
+    shell_cmd.push_str(" dashboard");
+    if gui {
+        shell_cmd.push_str(" --gui");
+    }
+    shell_cmd.push(' ');
+    shell_cmd.push_str(&shell_quote(target));
+    // bash -c exits once the command finishes; re-exec the shell so the
+    // window behaves like one the user opened themselves, matching
+    // Terminal.app / cmd /k's native behavior.
+    shell_cmd.push_str("; exec \"$SHELL\"");
+
+    for terminal in ["x-terminal-emulator", "gnome-terminal", "konsole", "xterm"] {
+        if which::which(terminal).is_err() {
+            continue;
+        }
+        let mut cmd = Command::new(terminal);
+        if terminal == "gnome-terminal" || terminal == "konsole" {
+            cmd.arg("--");
+        } else {
+            cmd.arg("-e");
+        }
+        cmd.arg("bash").arg("-c").arg(&shell_cmd);
+        cmd.spawn()?;
+        return Ok(());
+    }
+    Err(DesktopError::Message(
+        "no terminal emulator found on PATH".to_string(),
+    ))
+}
+
+fn launch_dashboard_blocking(target: String, gui: bool) -> Result<(), DesktopError> {
+    if !is_openable_target(&target) {
+        return Err(DesktopError::Message(
+            "mount target is not an absolute filesystem path".to_string(),
+        ));
+    }
+    if !list_contains_target(&target)? {
+        return Err(DesktopError::Message(
+            "refusing to launch a dashboard for a path that is not an active mount target"
+                .to_string(),
+        ));
+    }
+    spawn_dashboard_terminal(&mountos_path()?, &target, gui)
+}
+
+// async + spawn_blocking: on macOS a denied/pending Automation permission
+// can make the underlying osascript call take up to its own AppleEvent
+// timeout (~2 minutes) to fail, and this must not freeze the Tauri IPC
+// thread for that long.
+#[tauri::command]
+async fn launch_dashboard(target: String, gui: bool) -> Result<(), DesktopError> {
+    tauri::async_runtime::spawn_blocking(move || launch_dashboard_blocking(target, gui))
+        .await
+        .map_err(|error| DesktopError::Message(format!("dashboard launch task failed: {error}")))?
+}
+
 #[tauri::command]
 fn open_target(target: String) -> Result<(), DesktopError> {
     if !is_openable_target(&target) {
@@ -1225,6 +1561,42 @@ fn open_target(target: String) -> Result<(), DesktopError> {
     }
     open::that_detached(target)?;
     Ok(())
+}
+
+// The Dock icon (and Cmd+Tab entry) tracks the main window's own visibility
+// rather than being permanently off: hidden behind the tray only while the
+// window is actually hidden, so it doesn't strand an actively-open window
+// with no OS-level way back to it (no Dock icon, no Cmd+Tab).
+#[cfg(target_os = "macos")]
+fn set_dock_visible(app: &AppHandle, visible: bool) {
+    let _ = app.set_activation_policy(if visible {
+        tauri::ActivationPolicy::Regular
+    } else {
+        tauri::ActivationPolicy::Accessory
+    });
+    // set_activation_policy alone is unreliable on its own for the Dock icon
+    // actually appearing/disappearing; pairing it with set_dock_visibility is
+    // the combination that behaves consistently (confirmed against an older
+    // sibling client's tray implementation that hit the same gap).
+    let _ = app.set_dock_visibility(visible);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_dock_visible(_app: &AppHandle, _visible: bool) {}
+
+fn show_main_window_internal(app: &AppHandle) -> Result<(), DesktopError> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| DesktopError::Message("main window not found".to_string()))?;
+    set_dock_visible(app, true);
+    window.show()?;
+    window.set_focus()?;
+    Ok(())
+}
+
+#[tauri::command]
+fn show_main_window(app: AppHandle) -> Result<(), DesktopError> {
+    show_main_window_internal(&app)
 }
 
 #[tauri::command]
@@ -1285,6 +1657,109 @@ fn create_diagnostics_bundle_blocking(app: AppHandle) -> Result<DiagnosticsBundl
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            let _ = show_main_window_internal(app);
+        }))
+        .plugin(tauri_plugin_positioner::init())
+        .setup(|app| {
+            // Dock icon / Cmd+Tab entry tracks the main window's own
+            // visibility (see set_dock_visible) rather than being
+            // permanently off, so it doesn't strand an actively-open window
+            // with no OS-level way back to it. Sync once to the window's
+            // actual starting visibility (visible by default at first run).
+            let main_visible = app
+                .get_webview_window("main")
+                .and_then(|window| window.is_visible().ok())
+                .unwrap_or(true);
+            set_dock_visible(app.handle(), main_visible);
+
+            let show_item = MenuItem::with_id(app, "show", "Open mountOS", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "quit", "Quit mountOS", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+            let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
+
+            TrayIconBuilder::new()
+                .icon(tray_icon)
+                .icon_as_template(true)
+                .tooltip("mountOS")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "show" => {
+                        let _ = show_main_window_internal(app);
+                    }
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    tauri_plugin_positioner::on_tray_event(tray.app_handle(), &event);
+                    let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    else {
+                        return;
+                    };
+                    let Some(popover) = tray.app_handle().get_webview_window("tray-popover") else {
+                        return;
+                    };
+                    if popover.is_visible().unwrap_or(false) {
+                        let _ = popover.hide();
+                        return;
+                    }
+                    // Without this, the popover is invisible whenever a fullscreen app
+                    // owns the active Space: its window has no Dock icon to trigger the
+                    // usual macOS Space-switch-on-focus, so it stays parked on the Space
+                    // it was created on. CanJoinAllSpaces + FullScreenAuxiliary lets it
+                    // float above whatever Space (including a fullscreen one) is active.
+                    // Applied on every open (not once at setup) since the native NSWindow
+                    // handle may not be fully realized yet that early.
+                    #[cfg(target_os = "macos")]
+                    match popover.ns_window() {
+                        Ok(ns_window_ptr) => unsafe {
+                            let ns_window: &objc2_app_kit::NSWindow = &*ns_window_ptr.cast();
+                            ns_window.setCollectionBehavior(
+                                objc2_app_kit::NSWindowCollectionBehavior::CanJoinAllSpaces
+                                    | objc2_app_kit::NSWindowCollectionBehavior::FullScreenAuxiliary,
+                            );
+                        },
+                        Err(error) => eprintln!("tray-popover: failed to get ns_window handle: {error}"),
+                    }
+                    let _ = popover.move_window(Position::TrayCenter);
+                    // tauri-plugin-positioner's TrayCenter falls back to pinning the window's
+                    // top edge to the tray icon's own y-position on macOS (its "above tray"
+                    // math goes negative under the top menu bar), which tucks the popover
+                    // partially under the menu bar. Nudge it down to clear the bar.
+                    #[cfg(target_os = "macos")]
+                    if let (Ok(position), Ok(scale)) = (popover.outer_position(), popover.scale_factor()) {
+                        let menu_bar_clearance = (28.0 * scale) as i32;
+                        if position.y < menu_bar_clearance {
+                            let _ = popover.set_position(tauri::PhysicalPosition::new(position.x, menu_bar_clearance));
+                        }
+                    }
+                    let _ = popover.show();
+                    let _ = popover.set_focus();
+                })
+                .build(app)?;
+
+            Ok(())
+        })
+        .on_window_event(|window, event| match window.label() {
+            "main" => {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    set_dock_visible(window.app_handle(), false);
+                }
+            }
+            "tray-popover" => {
+                if let WindowEvent::Focused(false) = event {
+                    let _ = window.hide();
+                }
+            }
+            _ => {}
+        })
         .invoke_handler(tauri::generate_handler![
             get_system_state,
             get_settings,
@@ -1299,7 +1774,14 @@ pub fn run() {
             mount_profile,
             unmount_target,
             open_target,
+            get_instance_config,
+            launch_dashboard,
             create_diagnostics_bundle,
+            mcp_status,
+            mcp_install,
+            mcp_uninstall,
+            mount_help,
+            show_main_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running mountOS Desktop");
@@ -1325,6 +1807,7 @@ mod tests {
             cache_dir: Some("/tmp/mountos cache".to_string()),
             read_only: true,
             auto_remount: false,
+            temporary_fork: false,
             trusted_discovery_host: None,
             extra_args: vec!["--disk-cache-size".to_string(), "10G".to_string()],
             created_at: "2026-07-10T00:00:00Z".to_string(),
@@ -1377,6 +1860,34 @@ mod tests {
         // Non-FSKit backends are never gated by this check.
         assert!(validate_mount_path_for_backend(&Backend::Nfs, "/tmp/anything").is_ok());
         assert!(validate_mount_path_for_backend(&Backend::Nfs, "").is_ok());
+    }
+
+    #[test]
+    fn shell_quote_survives_a_shell_round_trip() {
+        // Every quoted value, fed through `sh -c 'printf %s ' + quoted`,
+        // must come back byte-for-byte identical — this is the actual
+        // property that matters for dashboard-launcher command construction.
+        for raw in [
+            "/Volumes/MountOS/Team",
+            "/tmp/has space",
+            "it's a mount",
+            "''; rm -rf /tmp/pwned; echo '",
+            "$(echo pwned)",
+            "back\\slash",
+            "",
+        ] {
+            let quoted = shell_quote(raw);
+            let output = Command::new("sh")
+                .arg("-c")
+                .arg(format!("printf '%s' {quoted}"))
+                .output()
+                .expect("sh must be available in test environment");
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout),
+                raw,
+                "shell_quote({raw:?}) = {quoted:?} did not round-trip"
+            );
+        }
     }
 
     #[test]

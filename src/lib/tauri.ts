@@ -10,7 +10,7 @@ import type {
   UnmountResult,
 } from './types'
 
-function hasDesktopBridge(): boolean {
+export function hasDesktopBridge(): boolean {
   return typeof globalThis !== 'undefined' && '__TAURI_INTERNALS__' in globalThis
 }
 
@@ -29,6 +29,7 @@ const fallbackProfiles: MountProfile[] = [
     backend: 'auto',
     readOnly: false,
     autoRemount: false,
+    temporaryFork: false,
     extraArgs: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -60,6 +61,7 @@ export async function getSystemState(): Promise<SystemState> {
           health: 'limited',
         },
       ],
+      cliPathAlternates: [],
     }
   }
   return invoke<SystemState>('get_system_state')
@@ -125,7 +127,42 @@ export async function openTarget(target: string): Promise<void> {
   await invoke('open_target', { target })
 }
 
+export async function getInstanceConfig(target: string): Promise<string> {
+  if (!hasDesktopBridge()) throw new Error('Desktop bridge unavailable')
+  return invoke<string>('get_instance_config', { target })
+}
+
+export async function launchDashboard(target: string, gui: boolean): Promise<void> {
+  if (!hasDesktopBridge()) throw new Error('Desktop bridge unavailable')
+  await invoke('launch_dashboard', { target, gui })
+}
+
 export async function createDiagnosticsBundle(): Promise<DiagnosticsBundle> {
   if (!hasDesktopBridge()) return { path: 'Desktop bridge unavailable' }
   return invoke<DiagnosticsBundle>('create_diagnostics_bundle')
+}
+
+export async function mcpStatus(): Promise<string> {
+  if (!hasDesktopBridge()) return 'Desktop bridge unavailable'
+  return invoke<string>('mcp_status')
+}
+
+export async function mcpInstall(): Promise<string> {
+  if (!hasDesktopBridge()) throw new Error('Desktop bridge unavailable')
+  return invoke<string>('mcp_install')
+}
+
+export async function mcpUninstall(): Promise<string> {
+  if (!hasDesktopBridge()) throw new Error('Desktop bridge unavailable')
+  return invoke<string>('mcp_uninstall')
+}
+
+export async function mountHelp(): Promise<string> {
+  if (!hasDesktopBridge()) throw new Error('Desktop bridge unavailable')
+  return invoke<string>('mount_help')
+}
+
+export async function showMainWindow(): Promise<void> {
+  if (!hasDesktopBridge()) return
+  await invoke('show_main_window')
 }
