@@ -1,6 +1,6 @@
 ---
 name: mountOS Desktop
-description: Desktop mount client for mountOS, profiles, credentials, mounts, health, diagnostics.
+description: Desktop mount client for mountOS, profiles, credentials, mounts, health, diagnostics. Native macOS/Windows app, desktop only, not responsive.
 colors:
   background-light: "oklch(0.95 0.02 94.63)"
   background-dark: "oklch(0.07 0.005 200)"
@@ -153,6 +153,8 @@ components:
 A control surface for people who mount and operate filesystems, not a marketing site. The visual language borrows from radar terminals and mission-control consoles: warm-on-cold light mode, golden-on-deep-teal dark mode, near-zero radii, corner brackets that frame data without competing with it. Density is the goal. Every pixel either carries information or stays out of the way.
 
 The system rejects the SaaS dashboard reflex of soft cards, rounded edges, decorative gradients, and hand-holding empty states. Users are experts; the interface treats them as such. Color is rationed: rust-amber primary in light, gold in dark, red-orange destructive, and entity-coded pastels reserved for tagging objects.
+
+**Platform: desktop only, not responsive.** A native macOS/Windows app window (Tauri), not a web page. `tauri.conf.json` enforces `minWidth: 860 / minHeight: 560` on the main window; there is no mobile or tablet target. The tray-popover window is a second, fixed-size native surface, not a breakpoint. Audit/critique responsive criteria against that: `@media (max-width: 860px)` exists only as edge-case tolerance at the window's exact floor (e.g. tiling window managers), not a mobile layout, and shouldn't be scored as if phone/tablet widths are in scope.
 
 **Key Characteristics:**
 - Sharp geometry: `--radius` caps at 0.25rem; buttons are square. Corner-bracket frames, not soft cards.

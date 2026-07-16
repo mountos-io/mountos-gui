@@ -1,6 +1,7 @@
 <script lang="ts">
   import { getCurrentWindow } from '@tauri-apps/api/window'
   import { FolderOpen, Maximize2, Unplug } from '@lucide/svelte'
+  import { isAbsolutePath } from './lib/cli'
   import { healthTone } from './lib/health'
   import { getSystemState, openTarget, showMainWindow, unmountTarget } from './lib/tauri'
   import { applyTheme, loadTheme, THEME_STORAGE_KEY } from './lib/theme'
@@ -46,7 +47,7 @@
   })
 
   function canOpen(instance: MountInstance) {
-    return instance.mountPath.startsWith('/') || /^[A-Za-z]:[\\/]?$/.test(instance.mountPath) || /^[A-Za-z]:[\\/]/.test(instance.mountPath)
+    return isAbsolutePath(instance.mountPath)
   }
 
   async function refresh() {
@@ -118,7 +119,7 @@
         <div class="row">
           <span class="led {healthTone(instance.health)}" title={instance.health} aria-hidden="true"></span>
           <div class="row-main">
-            <strong>{instance.name || instance.volumeId || 'mountOS volume'}</strong>
+            <strong>{instance.name || instance.volumeId || 'mountOS volume'} <span class="sr-only">({instance.health})</span></strong>
             <span class="mono-label">{instance.mountPath}</span>
           </div>
           <div class="row-actions">
@@ -203,7 +204,7 @@
 
   .row-main strong {
     overflow: hidden;
-    font-size: 0.9375rem;
+    font-size: 1rem;
     text-overflow: ellipsis;
     white-space: nowrap;
   }

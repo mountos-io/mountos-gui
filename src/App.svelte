@@ -923,10 +923,10 @@
                 <span>Fork</span>
                 <input class="input" value={selectedProfile.fork} oninput={(e) => patchProfile({ fork: e.currentTarget.value })} />
               </label>
-              <label class="field">
-                <span>Mount path</span>
+              <div class="field">
+                <label for="mount-path">Mount path</label>
                 {#if mountPathIsManaged}
-                  <input class="input" value={selectedProfile.mountPath} disabled placeholder="Managed automatically by the OS" />
+                  <input id="mount-path" class="input" value={selectedProfile.mountPath} disabled placeholder="Managed automatically by the OS" />
                   <small>
                     {selectedProfile.backend === 'fileprovider'
                       ? 'FileProvider mounts have no filesystem path; the volume appears in Finder under its volume name.'
@@ -935,6 +935,7 @@
                 {:else}
                   <div class="input-with-action">
                     <input
+                      id="mount-path"
                       class="input"
                       value={selectedProfile.mountPath}
                       placeholder={selectedProfile.backend === 'fskit' ? '/Volumes/MountOS/<name>' : undefined}
@@ -946,12 +947,12 @@
                     </button>
                   </div>
                 {/if}
-              </label>
+              </div>
               <label class="field">
                 <span>Secret</span>
                 <select class="select" value={selectedProfile.secretRef} onchange={(e) => patchProfile({ secretRef: e.currentTarget.value as 'vault' | 'prompt' })}>
                   <option value="prompt">Prompt on mount</option>
-                  <option value="vault" disabled={!selectedProfile.accessKeyId} title={!selectedProfile.accessKeyId ? 'Set an access key ID first' : undefined}>Vault</option>
+                  <option value="vault" disabled={!selectedProfile.accessKeyId}>Vault</option>
                 </select>
                 {#if !selectedProfile.accessKeyId}
                   <small>Vault storage needs an access key ID first.</small>
@@ -984,20 +985,21 @@
               </label>
             </div>
 
-            <label class="field">
+            <div class="field">
               <div class="field-head">
-                <span>Advanced options</span>
-                <button class="btn ghost small" type="button" onclick={toggleMountHelp} disabled={busy}>
+                <label for="advanced-options">Advanced options</label>
+                <button class="btn ghost small" type="button" onclick={toggleMountHelp} disabled={busy} aria-expanded={mountHelpVisible}>
                   {mountHelpVisible ? 'Hide help' : 'mountos mount -h'}
                 </button>
               </div>
               <textarea
+                id="advanced-options"
                 class="textarea"
                 value={extraArgsInput}
                 oninput={(e) => setExtraArgs(e.currentTarget.value)}
                 placeholder="Flags mountos mount accepts but this form doesn't manage, e.g. --disk-cache-size 10G"
               ></textarea>
-            </label>
+            </div>
 
             {#if mountHelpVisible}
               <div class="command-preview">
@@ -1079,10 +1081,10 @@
                   <table class="table">
                     <thead>
                       <tr>
-                        <th>Name</th>
-                        <th>Backend</th>
-                        <th>Mount path</th>
-                        <th>Secret</th>
+                        <th scope="col">Name</th>
+                        <th scope="col">Backend</th>
+                        <th scope="col">Mount path</th>
+                        <th scope="col">Secret</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1581,7 +1583,8 @@
     gap: 6px;
   }
 
-  .field > span {
+  .field > span,
+  .field > label {
     color: var(--label-foreground);
     font-size: 1rem;
     font-weight: 500;
@@ -1608,7 +1611,8 @@
     flex-shrink: 0;
   }
 
-  .field-head span {
+  .field-head span,
+  .field-head label {
     color: var(--label-foreground);
     font-size: 1rem;
     font-weight: 500;
