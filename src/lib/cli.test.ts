@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { backendNeedsMountPath, buildMountArgv, classifyMountError, parseArgvInput, validateExtraArgs, validateMountPathForBackend } from './cli'
+import { backendNeedsMountPath, buildMountArgv, classifyMountError, isAbsolutePath, isValidFolderName, parseArgvInput, validateExtraArgs, validateMountPathForBackend } from './cli'
 import type { MountProfile } from './types'
 
 const profile: MountProfile = {
@@ -91,6 +91,26 @@ describe('cli helpers', () => {
     expect(validateMountPathForBackend('nfs', '')).toBeNull()
   })
 
+  it('recognizes Unix and Windows absolute paths', () => {
+    expect(isAbsolutePath('/Volumes/MountOS/Team')).toBe(true)
+    expect(isAbsolutePath('C:\\Mounts\\Team')).toBe(true)
+    expect(isAbsolutePath('C:/Mounts/Team')).toBe(true)
+    expect(isAbsolutePath('C:')).toBe(true)
+    expect(isAbsolutePath('C:\\')).toBe(true)
+    expect(isAbsolutePath('relative/path')).toBe(false)
+    expect(isAbsolutePath('C:foo')).toBe(false)
+    expect(isAbsolutePath('')).toBe(false)
+  })
+
+  it('rejects a non-empty mount path that is not absolute', () => {
+    expect(validateMountPathForBackend('nfs', 'relative/path')).not.toBeNull()
+    expect(validateMountPathForBackend('nfs', 'not-a-path')).not.toBeNull()
+    expect(validateMountPathForBackend('nfs', 'C:\\Mounts\\Team')).toBeNull()
+    // FileProvider/CloudFilter never need a real path, so garbage passes.
+    expect(validateMountPathForBackend('fileprovider', 'not-a-path')).toBeNull()
+    expect(validateMountPathForBackend('cloudfilter', 'not-a-path')).toBeNull()
+  })
+
   it('validates short flag clusters', () => {
     // A managed short flag anywhere before the '-o' value-absorbing point
     // is caught, regardless of position in the cluster.
@@ -121,5 +141,16 @@ describe('cli helpers', () => {
     expect(classifyMountError('authentication failed - invalid access key or secret')).toBe('auth')
     expect(classifyMountError('mount point /x is not empty')).toBe('mountpoint')
     expect(classifyMountError('did not become ready within 30s')).toBe('indeterminate')
+  })
+
+  it('validates folder names', () => {
+    expect(isValidFolderName('Team')).toBe(true)
+    expect(isValidFolderName('Team Files')).toBe(true)
+    expect(isValidFolderName('')).toBe(false)
+    expect(isValidFolderName('.')).toBe(false)
+    expect(isValidFolderName('..')).toBe(false)
+    expect(isValidFolderName('Team/Files')).toBe(false)
+    expect(isValidFolderName('Team\\Files')).toBe(false)
+    expect(isValidFolderName('Team\0Files')).toBe(false)
   })
 })

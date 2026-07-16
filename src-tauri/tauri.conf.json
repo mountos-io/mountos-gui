@@ -19,7 +19,9 @@
         "height": 760,
         "minWidth": 860,
         "minHeight": 560,
-        "backgroundColor": "#f3efe0"
+        "backgroundColor": "#f3efe0",
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
       },
       {
         "label": "tray-popover",
@@ -33,6 +35,7 @@
         "skipTaskbar": true,
         "shadow": true,
         "visible": false,
+        "visibleOnAllWorkspaces": true,
         "backgroundColor": "#f3efe0"
       }
     ],

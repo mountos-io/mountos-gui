@@ -12,11 +12,10 @@ use std::{
     time::{Duration, Instant},
 };
 use tauri::{
-    menu::{Menu, MenuItem},
-    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem},
+    tray::{TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, WindowEvent,
 };
-use tauri_plugin_positioner::{Position, WindowExt};
 
 #[derive(Debug, thiserror::Error)]
 enum DesktopError {
@@ -135,8 +134,43 @@ struct SecretStatus {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DiagnosticsCommandOutput {
+    status: Option<i32>,
+    stdout: Value,
+    stderr: Value,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DiagnosticsProfileSummary {
+    id: String,
+    name: String,
+    kind: String,
+    mount_path: String,
+    discovery_url: String,
+    backend: Backend,
+    secret_ref: String,
+    extra_args_count: usize,
+    auto_remount: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DiagnosticsContent {
+    created_at_unix: u64,
+    cli_path: Option<String>,
+    cli_version: Option<String>,
+    check: Option<DiagnosticsCommandOutput>,
+    list: Option<DiagnosticsCommandOutput>,
+    profiles: Vec<DiagnosticsProfileSummary>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct DiagnosticsBundle {
     path: String,
+    content: DiagnosticsContent,
 }
 
 #[derive(Debug, Serialize)]
@@ -182,6 +216,7 @@ struct UnmountResult {
 }
 
 const KEYRING_SERVICE: &str = "sh.mountos.desktop";
+const ACCESS_KEY_ID_LENGTH: usize = 20;
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(65);
 #[cfg(windows)]
 const WINDOWS_READY_TIMEOUT: Duration = Duration::from_secs(60);
@@ -507,6 +542,16 @@ fn validate_mount_path_for_backend(
     backend: &Backend,
     mount_path: &str,
 ) -> Result<(), DesktopError> {
+    // Empty stays legal for backends that need a path: build_mount_argv omits
+    // -m entirely in that case and the mountos CLI picks its own default.
+    // What's rejected here is a NON-empty value that isn't a real absolute
+    // path for this OS (Unix "/..." or a Windows drive-letter path) — e.g.
+    // a relative path or garbage typed into the field.
+    if backend_needs_mount_path(backend) && !mount_path.is_empty() && !is_openable_target(mount_path) {
+        return Err(DesktopError::Message(format!(
+            "mount path must be an absolute filesystem path, got {mount_path:?}"
+        )));
+    }
     if matches!(backend, Backend::Fskit) {
         let trimmed = mount_path.trim_end_matches('/');
         if trimmed.is_empty() || !(trimmed.starts_with(FSKIT_MOUNT_PREFIX) && trimmed.len() > FSKIT_MOUNT_PREFIX.len())
@@ -1090,6 +1135,18 @@ fn save_profile(app: AppHandle, profile: MountProfile) -> Result<MountProfile, D
             "unsupported profile kind".to_string(),
         ));
     }
+    if profile.secret_ref == "vault" && profile.access_key_id.is_empty() {
+        return Err(DesktopError::Message(
+            "vault storage requires an access key ID".to_string(),
+        ));
+    }
+    // Length-only: mountOS access key IDs are fixed-length, but the exact
+    // charset isn't this GUI's contract to police.
+    if !profile.access_key_id.is_empty() && profile.access_key_id.chars().count() != ACCESS_KEY_ID_LENGTH {
+        return Err(DesktopError::Message(format!(
+            "access key ID must be {ACCESS_KEY_ID_LENGTH} characters"
+        )));
+    }
     validate_mount_path_for_backend(&profile.backend, &profile.mount_path)?;
     let rejected = validate_extra_args(&profile.extra_args);
     if !rejected.is_empty() {
@@ -1620,39 +1677,81 @@ fn create_diagnostics_bundle_blocking(app: AppHandle) -> Result<DiagnosticsBundl
     let check = command_output(&["check", "--json"]).ok();
     let list = command_output(&["list", "--json"]).ok();
     let profiles = read_profiles(&app).unwrap_or_default();
-    let payload = serde_json::json!({
-        "createdAtUnix": std::time::SystemTime::now()
+    let content = DiagnosticsContent {
+        created_at_unix: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs(),
-        "cliPath": mountos_path().ok().map(|path| path.display().to_string()),
-        "cliVersion": cli_version(),
-        "check": check.as_ref().map(|output| serde_json::json!({
-            "status": output.status.code(),
-            "stdout": scrub_output(&output.stdout),
-            "stderr": scrub_output(&output.stderr),
-        })),
-        "list": list.as_ref().map(|output| serde_json::json!({
-            "status": output.status.code(),
-            "stdout": scrub_output(&output.stdout),
-            "stderr": scrub_output(&output.stderr),
-        })),
-        "profiles": profiles.into_iter().map(|profile| serde_json::json!({
-            "id": profile.id,
-            "name": profile.name,
-            "kind": profile.kind,
-            "mountPath": profile.mount_path,
-            "discoveryUrl": profile.discovery_url,
-            "backend": profile.backend,
-            "secretRef": profile.secret_ref,
-            "extraArgsCount": profile.extra_args.len(),
-            "autoRemount": profile.auto_remount,
-        })).collect::<Vec<_>>(),
-    });
-    fs::write(&path, serde_json::to_vec_pretty(&payload)?)?;
+        cli_path: mountos_path().ok().map(|path| path.display().to_string()),
+        cli_version: cli_version(),
+        check: check.as_ref().map(|output| DiagnosticsCommandOutput {
+            status: output.status.code(),
+            stdout: scrub_output(&output.stdout),
+            stderr: scrub_output(&output.stderr),
+        }),
+        list: list.as_ref().map(|output| DiagnosticsCommandOutput {
+            status: output.status.code(),
+            stdout: scrub_output(&output.stdout),
+            stderr: scrub_output(&output.stderr),
+        }),
+        profiles: profiles
+            .into_iter()
+            .map(|profile| DiagnosticsProfileSummary {
+                id: profile.id,
+                name: profile.name,
+                kind: profile.kind,
+                mount_path: profile.mount_path,
+                discovery_url: profile.discovery_url,
+                backend: profile.backend,
+                secret_ref: profile.secret_ref,
+                extra_args_count: profile.extra_args.len(),
+                auto_remount: profile.auto_remount,
+            })
+            .collect(),
+    };
+    fs::write(&path, serde_json::to_vec_pretty(&content)?)?;
     Ok(DiagnosticsBundle {
         path: path.display().to_string(),
+        content,
     })
+}
+
+fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let instances = get_system_state_blocking(app.clone())
+        .map(|state| state.instances)
+        .unwrap_or_default();
+
+    let mut items: Vec<Box<dyn IsMenuItem<tauri::Wry>>> = Vec::new();
+    if instances.is_empty() {
+        items.push(Box::new(MenuItem::with_id(
+            app,
+            "no-mounts",
+            "No active mounts",
+            false,
+            None::<&str>,
+        )?));
+    } else {
+        for instance in &instances {
+            let label = if instance.name.is_empty() {
+                instance.mount_path.clone()
+            } else {
+                instance.name.clone()
+            };
+            items.push(Box::new(MenuItem::with_id(
+                app,
+                format!("open-mount:{}", instance.mount_path),
+                format!("{label} \u{2014} {}", instance.health),
+                is_openable_target(&instance.mount_path),
+                None::<&str>,
+            )?));
+        }
+    }
+    items.push(Box::new(PredefinedMenuItem::separator(app)?));
+    items.push(Box::new(MenuItem::with_id(app, "show", "Open mountOS", true, None::<&str>)?));
+    items.push(Box::new(MenuItem::with_id(app, "quit", "Quit mountOS", true, None::<&str>)?));
+
+    let refs: Vec<&dyn IsMenuItem<tauri::Wry>> = items.iter().map(|item| item.as_ref()).collect();
+    Menu::with_items(app, &refs)
 }
 
 pub fn run() {
@@ -1661,6 +1760,7 @@ pub fn run() {
             let _ = show_main_window_internal(app);
         }))
         .plugin(tauri_plugin_positioner::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // Dock icon / Cmd+Tab entry tracks the main window's own
             // visibility (see set_dock_visible) rather than being
@@ -1673,9 +1773,7 @@ pub fn run() {
                 .unwrap_or(true);
             set_dock_visible(app.handle(), main_visible);
 
-            let show_item = MenuItem::with_id(app, "show", "Open mountOS", true, None::<&str>)?;
-            let quit_item = MenuItem::with_id(app, "quit", "Quit mountOS", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+            let menu = build_tray_menu(app.handle())?;
             let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
 
             TrayIconBuilder::new()
@@ -1683,63 +1781,32 @@ pub fn run() {
                 .icon_as_template(true)
                 .tooltip("mountOS")
                 .menu(&menu)
-                .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| match event.id().as_ref() {
-                    "show" => {
-                        let _ = show_main_window_internal(app);
+                .on_menu_event(|app, event| {
+                    let id = event.id().as_ref();
+                    if let Some(target) = id.strip_prefix("open-mount:") {
+                        let _ = open_target(target.to_string());
+                        return;
                     }
-                    "quit" => app.exit(0),
-                    _ => {}
+                    match id {
+                        "show" => {
+                            let _ = show_main_window_internal(app);
+                        }
+                        "quit" => app.exit(0),
+                        _ => {}
+                    }
                 })
                 .on_tray_icon_event(|tray, event| {
-                    tauri_plugin_positioner::on_tray_event(tray.app_handle(), &event);
-                    let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    else {
-                        return;
-                    };
-                    let Some(popover) = tray.app_handle().get_webview_window("tray-popover") else {
-                        return;
-                    };
-                    if popover.is_visible().unwrap_or(false) {
-                        let _ = popover.hide();
-                        return;
-                    }
-                    // Without this, the popover is invisible whenever a fullscreen app
-                    // owns the active Space: its window has no Dock icon to trigger the
-                    // usual macOS Space-switch-on-focus, so it stays parked on the Space
-                    // it was created on. CanJoinAllSpaces + FullScreenAuxiliary lets it
-                    // float above whatever Space (including a fullscreen one) is active.
-                    // Applied on every open (not once at setup) since the native NSWindow
-                    // handle may not be fully realized yet that early.
-                    #[cfg(target_os = "macos")]
-                    match popover.ns_window() {
-                        Ok(ns_window_ptr) => unsafe {
-                            let ns_window: &objc2_app_kit::NSWindow = &*ns_window_ptr.cast();
-                            ns_window.setCollectionBehavior(
-                                objc2_app_kit::NSWindowCollectionBehavior::CanJoinAllSpaces
-                                    | objc2_app_kit::NSWindowCollectionBehavior::FullScreenAuxiliary,
-                            );
-                        },
-                        Err(error) => eprintln!("tray-popover: failed to get ns_window handle: {error}"),
-                    }
-                    let _ = popover.move_window(Position::TrayCenter);
-                    // tauri-plugin-positioner's TrayCenter falls back to pinning the window's
-                    // top edge to the tray icon's own y-position on macOS (its "above tray"
-                    // math goes negative under the top menu bar), which tucks the popover
-                    // partially under the menu bar. Nudge it down to clear the bar.
-                    #[cfg(target_os = "macos")]
-                    if let (Ok(position), Ok(scale)) = (popover.outer_position(), popover.scale_factor()) {
-                        let menu_bar_clearance = (28.0 * scale) as i32;
-                        if position.y < menu_bar_clearance {
-                            let _ = popover.set_position(tauri::PhysicalPosition::new(position.x, menu_bar_clearance));
+                    // Native menus render reliably everywhere (including over
+                    // another app's fullscreen Space) since AppKit itself owns
+                    // showing them — unlike the tray-popover webview window,
+                    // which repeated attempts couldn't make reliably visible
+                    // there. Rebuilt on hover so the mount list is current by
+                    // the time an actual click follows.
+                    if let TrayIconEvent::Enter { .. } = event {
+                        if let Ok(menu) = build_tray_menu(tray.app_handle()) {
+                            let _ = tray.set_menu(Some(menu));
                         }
                     }
-                    let _ = popover.show();
-                    let _ = popover.set_focus();
                 })
                 .build(app)?;
 
@@ -1860,6 +1927,26 @@ mod tests {
         // Non-FSKit backends are never gated by this check.
         assert!(validate_mount_path_for_backend(&Backend::Nfs, "/tmp/anything").is_ok());
         assert!(validate_mount_path_for_backend(&Backend::Nfs, "").is_ok());
+    }
+
+    #[test]
+    fn rejects_non_absolute_mount_paths_for_backends_that_need_one() {
+        // Empty stays legal (build_mount_argv omits -m, CLI picks a default).
+        assert!(validate_mount_path_for_backend(&Backend::Nfs, "").is_ok());
+        // A non-empty value has to actually be an absolute path, not garbage.
+        assert!(validate_mount_path_for_backend(&Backend::Nfs, "relative/path").is_err());
+        assert!(validate_mount_path_for_backend(&Backend::Nfs, "not-a-path").is_err());
+        if cfg!(windows) {
+            assert!(validate_mount_path_for_backend(&Backend::Mountosio, "C:\\Mounts\\Team").is_ok());
+            assert!(validate_mount_path_for_backend(&Backend::Mountosio, "D:").is_ok());
+            assert!(validate_mount_path_for_backend(&Backend::Mountosio, "/Volumes/Team").is_err());
+        } else {
+            assert!(validate_mount_path_for_backend(&Backend::Nfs, "/Volumes/Team").is_ok());
+        }
+        // Backends with no real filesystem path (FileProvider/CloudFilter)
+        // are never gated by this check either.
+        assert!(validate_mount_path_for_backend(&Backend::Fileprovider, "not-a-path").is_ok());
+        assert!(validate_mount_path_for_backend(&Backend::Cloudfilter, "not-a-path").is_ok());
     }
 
     #[test]

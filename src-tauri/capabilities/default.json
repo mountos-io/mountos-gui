@@ -3,5 +3,11 @@
   "identifier": "default",
   "description": "Main window and tray popover permissions",
   "windows": ["main", "tray-popover"],
-  "permissions": ["core:default", "positioner:default"]
+  "permissions": [
+    "core:default",
+    "positioner:default",
+    "core:window:allow-set-theme",
+    "core:window:allow-start-dragging",
+    "dialog:allow-open"
+  ]
 }

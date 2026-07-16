@@ -22,8 +22,7 @@
   --border: oklch(0.88 0 0);
   --input: oklch(0.96 0 0);
   --ring: oklch(0.61 0.14 39);
-  --scrollbar-thumb: oklch(0.61 0.14 39);
-  --scrollbar-track: oklch(0.95 0 0);
+  --scrollbar-thumb: var(--primary);
   --pastel-mount: oklch(0.75 0.14 90);
   --pastel-mount-text: oklch(0.52 0.14 90);
   --pastel-volume: oklch(0.72 0.15 155);
@@ -61,8 +60,7 @@
   --border: oklch(0.21 0.008 200);
   --input: oklch(0.09 0.005 200);
   --ring: oklch(0.78 0.13 92);
-  --scrollbar-thumb: oklch(0.78 0.13 92);
-  --scrollbar-track: oklch(0.11 0.005 200);
+  --scrollbar-thumb: var(--primary);
   --pastel-mount: oklch(0.73 0.15 90);
   --pastel-mount-text: oklch(0.73 0.15 90);
   --pastel-volume: oklch(0.70 0.16 155);
@@ -166,17 +164,18 @@ p {
 }
 
 .main {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
+  min-height: 100%;
   overflow: auto;
 }
 
-.main,
-.table-wrap,
-.list {
-  scrollbar-width: thin;
-  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
-}
-
+/* Deliberately no scrollbar-width/scrollbar-color: those force a permanent
+   Firefox-style bar in WebKit, overriding macOS's native overlay scrollbar
+   (thin, auto-hides, appears on hover/scroll). Only the ::-webkit-scrollbar-*
+   pseudo-elements are themed, which keeps that native show/hide behavior and
+   just recolors the thumb to the brand color when it's visible. */
 .main::-webkit-scrollbar,
 .table-wrap::-webkit-scrollbar,
 .list::-webkit-scrollbar {
@@ -187,7 +186,7 @@ p {
 .main::-webkit-scrollbar-track,
 .table-wrap::-webkit-scrollbar-track,
 .list::-webkit-scrollbar-track {
-  background: var(--scrollbar-track);
+  background: transparent;
 }
 
 .main::-webkit-scrollbar-thumb,

@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import { open } from '@tauri-apps/plugin-dialog'
 import type {
   DesktopSettings,
   DiagnosticsBundle,
@@ -165,4 +166,10 @@ export async function mountHelp(): Promise<string> {
 export async function showMainWindow(): Promise<void> {
   if (!hasDesktopBridge()) return
   await invoke('show_main_window')
+}
+
+export async function browseFolder(title: string, defaultPath?: string): Promise<string | null> {
+  if (!hasDesktopBridge()) return null
+  const selected = await open({ directory: true, multiple: false, title, defaultPath })
+  return typeof selected === 'string' ? selected : null
 }

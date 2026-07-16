@@ -32,11 +32,12 @@
     Unplug,
     X,
   } from '@lucide/svelte'
-  import { backendNeedsMountPath, buildMountArgv, classifyMountError, errorClassLabel, parseArgvInput, validateExtraArgs, validateMountPathForBackend } from './lib/cli'
+  import { backendNeedsMountPath, buildMountArgv, classifyMountError, errorClassLabel, FSKIT_MOUNT_PREFIX, isAbsolutePath, isValidFolderName, parseArgvInput, validateExtraArgs, validateMountPathForBackend } from './lib/cli'
   import { healthTone } from './lib/health'
   import { applyTheme, loadTheme, saveTheme } from './lib/theme'
   import type { Theme } from './lib/theme'
   import {
+    browseFolder,
     createDiagnosticsBundle,
     deleteProfile,
     deleteProfileSecret,
@@ -58,9 +59,13 @@
     setProfileSecret,
     unmountTarget,
   } from './lib/tauri'
-  import type { Backend, DesktopSettings, MountInstance, MountProfile, SystemState } from './lib/types'
+  import type { Backend, DesktopSettings, DiagnosticsBundle, DiagnosticsCommandOutput, MountInstance, MountProfile, SystemState } from './lib/types'
 
   type View = 'instances' | 'profiles' | 'health' | 'settings'
+
+  // mountOS access key IDs are fixed-length; this only checks length (not
+  // charset) since that's the one constraint the GUI can enforce cheaply.
+  const ACCESS_KEY_ID_LENGTH = 20
 
   let view = $state<View>('instances')
   let loaded = $state(false)
@@ -84,7 +89,7 @@
   let deleteDialog = $state<HTMLDialogElement | undefined>()
   let settings = $state<DesktopSettings>({ defaultBackend: 'auto' })
   let vaultStatus = $state<Record<string, boolean>>({})
-  let diagnosticsPath = $state('')
+  let diagnosticsBundle = $state<DiagnosticsBundle | null>(null)
   let mcpStatusText = $state('')
   let expandedConfig = $state<Record<string, string>>({})
   let mountHelpText = $state('')
@@ -285,6 +290,31 @@
     updatePreview(next)
   }
 
+  function setAccessKeyId(value: string) {
+    if (!selectedProfile) return
+    // Vault storage needs an access key ID to pair the vaulted secret with;
+    // clearing it while Vault is selected would leave an orphaned choice.
+    const clearingVault = !value && selectedProfile.secretRef === 'vault'
+    patchProfile({ accessKeyId: value, ...(clearingVault ? { secretRef: 'prompt' } : {}) })
+  }
+
+  async function browseMountPath() {
+    if (!selectedProfile) return
+    try {
+      const isFskit = selectedProfile.backend === 'fskit'
+      const selected = await browseFolder('Choose mount folder', isFskit ? '/Volumes' : undefined)
+      if (!selected) return
+      // FSKit's mount point is a fixed container (/Volumes/MountOS/<name>);
+      // browsing picks that container, and the leaf folder name comes from
+      // the volume name already set above, so it isn't retyped here too.
+      const volume = selectedProfile.volume
+      const mountPath = isFskit && volume && isValidFolderName(volume) ? `${selected.replace(/\/+$/, '')}/${volume}` : selected
+      patchProfile({ mountPath })
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Failed to open folder picker', 'error')
+    }
+  }
+
   function setExtraArgs(value: string) {
     extraArgsInput = value
     try {
@@ -388,8 +418,7 @@
   async function createBundle() {
     busy = true
     try {
-      const bundle = await createDiagnosticsBundle()
-      diagnosticsPath = bundle.path
+      diagnosticsBundle = await createDiagnosticsBundle()
       notify('Diagnostics bundle created')
     } catch (error) {
       notify(error instanceof Error ? error.message : 'Diagnostics bundle failed', 'error')
@@ -422,7 +451,7 @@
   }
 
   function canOpen(instance: MountInstance) {
-    return instance.mountPath.startsWith('/') || /^[A-Za-z]:[\\/]?$/.test(instance.mountPath) || /^[A-Za-z]:[\\/]/.test(instance.mountPath)
+    return isAbsolutePath(instance.mountPath)
   }
 
   async function toggleInstanceConfig(instance: MountInstance) {
@@ -490,6 +519,17 @@
     if (!selectedProfile || mountPathIsManaged) return ''
     if (!selectedProfile.mountPath.trim()) return 'Mount path is required for this backend'
     return validateMountPathForBackend(selectedProfile.backend, selectedProfile.mountPath) ?? ''
+  })
+  const accessKeyError = $derived.by(() => {
+    if (!selectedProfile || !selectedProfile.accessKeyId) return ''
+    return selectedProfile.accessKeyId.length === ACCESS_KEY_ID_LENGTH ? '' : `Access key ID must be ${ACCESS_KEY_ID_LENGTH} characters`
+  })
+  // Only FSKit turns the volume name into a filesystem path segment
+  // (browseMountPath appends it to the picked folder); other backends just
+  // pass it through as --volname, so it isn't constrained there.
+  const volumeNameError = $derived.by(() => {
+    if (!selectedProfile || selectedProfile.backend !== 'fskit' || !selectedProfile.volume) return ''
+    return isValidFolderName(selectedProfile.volume) ? '' : 'Volume name must be a valid folder name (no /, \\, or control characters)'
   })
 
   let theme = $state<Theme>(loadTheme())
@@ -629,7 +669,7 @@
 
 <div class="app-shell" class:sidebar-collapsed={sidebarCollapsed}>
   <aside class="sidebar">
-    <div class="brand">
+    <div class="brand" data-tauri-drag-region="deep">
       <img class="mark" src="/logo.png" alt="" width="36" height="36" />
       {#if !sidebarCollapsed}<h1>mountOS</h1>{/if}
     </div>
@@ -661,7 +701,7 @@
   </aside>
 
   <main class="main" aria-busy={busy}>
-    <header class="topbar">
+    <header class="topbar" data-tauri-drag-region="deep">
       <h2>{viewTitle(view)}</h2>
       <div class="topbar-actions">
         {#if view === 'instances'}
@@ -837,11 +877,11 @@
                 <button class="btn icon-btn destructive" type="button" title="Delete profile" aria-label="Delete profile" disabled={busy} onclick={() => (deletePromptFor = selectedProfile)}>
                   <Trash2 size={16} aria-hidden="true" />
                 </button>
-                <button class="btn" type="button" disabled={busy || !!extraArgsError || rejectedArgs.length > 0 || !!mountPathError} onclick={() => runMount(selectedProfile)}>
+                <button class="btn" type="button" disabled={busy || !!extraArgsError || rejectedArgs.length > 0 || !!mountPathError || !!accessKeyError || !!volumeNameError} onclick={() => runMount(selectedProfile)}>
                   <Power size={16} aria-hidden="true" />
                   Mount
                 </button>
-                <button class="btn primary" type="submit" disabled={busy || !!extraArgsError || rejectedArgs.length > 0 || !!mountPathError}>
+                <button class="btn primary" type="submit" disabled={busy || !!extraArgsError || rejectedArgs.length > 0 || !!mountPathError || !!accessKeyError || !!volumeNameError}>
                   <Save size={16} aria-hidden="true" />
                   Save
                 </button>
@@ -865,11 +905,19 @@
               </label>
               <label class="field">
                 <span>Access key ID</span>
-                <input class="input" value={selectedProfile.accessKeyId} maxlength="20" oninput={(e) => patchProfile({ accessKeyId: e.currentTarget.value })} />
+                <input class="input" value={selectedProfile.accessKeyId} maxlength={ACCESS_KEY_ID_LENGTH} oninput={(e) => setAccessKeyId(e.currentTarget.value)} />
+                {#if accessKeyError}
+                  <small class="field-error">{accessKeyError}</small>
+                {/if}
               </label>
               <label class="field">
                 <span>Volume name</span>
                 <input class="input" value={selectedProfile.volume} oninput={(e) => patchProfile({ volume: e.currentTarget.value })} />
+                {#if volumeNameError}
+                  <small class="field-error">{volumeNameError}</small>
+                {:else if selectedProfile.backend === 'fskit'}
+                  <small>Used as the mount point's folder name under {FSKIT_MOUNT_PREFIX}</small>
+                {/if}
               </label>
               <label class="field">
                 <span>Fork</span>
@@ -885,20 +933,29 @@
                       : 'CloudFilter mounts have no filesystem path; the volume appears under its own drive/namespace.'}
                   </small>
                 {:else}
-                  <input
-                    class="input"
-                    value={selectedProfile.mountPath}
-                    placeholder={selectedProfile.backend === 'fskit' ? '/Volumes/MountOS/<name>' : undefined}
-                    oninput={(e) => patchProfile({ mountPath: e.currentTarget.value })}
-                  />
+                  <div class="input-with-action">
+                    <input
+                      class="input"
+                      value={selectedProfile.mountPath}
+                      placeholder={selectedProfile.backend === 'fskit' ? '/Volumes/MountOS/<name>' : undefined}
+                      oninput={(e) => patchProfile({ mountPath: e.currentTarget.value })}
+                    />
+                    <button class="btn" type="button" onclick={browseMountPath} disabled={busy} title="Choose a folder">
+                      <FolderOpen size={16} aria-hidden="true" />
+                      Browse
+                    </button>
+                  </div>
                 {/if}
               </label>
               <label class="field">
                 <span>Secret</span>
                 <select class="select" value={selectedProfile.secretRef} onchange={(e) => patchProfile({ secretRef: e.currentTarget.value as 'vault' | 'prompt' })}>
                   <option value="prompt">Prompt on mount</option>
-                  <option value="vault">Vault</option>
+                  <option value="vault" disabled={!selectedProfile.accessKeyId} title={!selectedProfile.accessKeyId ? 'Set an access key ID first' : undefined}>Vault</option>
                 </select>
+                {#if !selectedProfile.accessKeyId}
+                  <small>Vault storage needs an access key ID first.</small>
+                {/if}
               </label>
             </div>
 
@@ -996,10 +1053,52 @@
             <span class="badge {systemState.checkOk ? 'success' : 'warning'}">{systemState.checkOk ? 'Ready' : 'Needs attention'}</span>
           </div>
         </div>
-        {#if diagnosticsPath}
-          <div class="command-preview diagnostics-path">
-            <p class="mono-label">LOCAL BUNDLE</p>
-            <code>{diagnosticsPath}</code>
+        {#if diagnosticsBundle}
+          <div class="diagnostics-report">
+            <div class="command-preview diagnostics-path">
+              <p class="mono-label">LOCAL BUNDLE</p>
+              <code>{diagnosticsBundle.path}</code>
+            </div>
+            {#if diagnosticsBundle.content}
+              {@const content = diagnosticsBundle.content}
+              <div class="diagnostics-grid">
+                <div class="setting-row">
+                  <span class="mono-label">CLI PATH</span>
+                  <code>{content.cliPath ?? 'not found'}</code>
+                </div>
+                <div class="setting-row">
+                  <span class="mono-label">CLI VERSION</span>
+                  <code>{content.cliVersion ?? 'unavailable'}</code>
+                </div>
+              </div>
+              {@render DiagnosticsOutput('CHECK OUTPUT', content.check)}
+              {@render DiagnosticsOutput('LIST OUTPUT', content.list)}
+              {#if content.profiles.length}
+                <p class="mono-label">SAVED PROFILES ({content.profiles.length})</p>
+                <div class="table-wrap">
+                  <table class="table">
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>Backend</th>
+                        <th>Mount path</th>
+                        <th>Secret</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {#each content.profiles as profile (profile.id)}
+                        <tr>
+                          <td>{profile.name}</td>
+                          <td><span class="badge">{profile.backend}</span></td>
+                          <td><code>{profile.mountPath || '—'}</code></td>
+                          <td>{profile.secretRef}</td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+              {/if}
+            {/if}
           </div>
         {/if}
         <div class="issue-list">
@@ -1122,8 +1221,10 @@
 <dialog class="modal" bind:this={secretDialog} onclose={cancelSecret} aria-labelledby="secret-dialog-title">
   {#if secretPromptFor}
     <form onsubmit={(event) => { event.preventDefault(); void doMount(secretPromptFor!, secretValue) }}>
-      <KeyRound size={22} aria-hidden="true" />
-      <h3 id="secret-dialog-title">Enter secret access key</h3>
+      <div class="modal-head">
+        <KeyRound size={20} aria-hidden="true" />
+        <h3 id="secret-dialog-title">Enter secret access key</h3>
+      </div>
       <p>The secret is written to child stdin with a trailing newline. It is never placed on argv or in the environment by the GUI.</p>
       <!-- svelte-ignore a11y_autofocus -->
       <input class="input" type="password" bind:value={secretValue} autocomplete="current-password" autofocus aria-label="Secret access key" />
@@ -1148,8 +1249,10 @@
 <dialog class="modal" bind:this={deleteDialog} onclose={cancelDelete} aria-labelledby="delete-dialog-title">
   {#if deletePromptFor}
     <form onsubmit={(event) => { event.preventDefault(); void confirmDelete() }}>
-      <Trash2 size={22} aria-hidden="true" />
-      <h3 id="delete-dialog-title">Delete profile</h3>
+      <div class="modal-head">
+        <Trash2 size={20} aria-hidden="true" />
+        <h3 id="delete-dialog-title">Delete profile</h3>
+      </div>
       <p>Deletes "{deletePromptFor.name}" and its vaulted secret. Running mounts are not affected.</p>
       <div class="row-actions">
         <button class="btn" type="button" onclick={cancelDelete}>Cancel</button>
@@ -1170,12 +1273,27 @@
   <small class="hint"><Lightbulb size={13} aria-hidden="true" />{text}</small>
 {/snippet}
 
+{#snippet DiagnosticsOutput(title: string, output: DiagnosticsCommandOutput | undefined)}
+  {#if output}
+    <div class="command-preview">
+      <p class="mono-label">{title} <span class="badge {output.status === 0 ? 'success' : 'warning'}">exit {output.status ?? 'unknown'}</span></p>
+      <pre><code>{JSON.stringify(output.stdout, null, 2)}</code></pre>
+      {#if output.stderr && (typeof output.stderr !== 'string' || output.stderr.trim())}
+        <p class="mono-label">STDERR</p>
+        <pre><code>{JSON.stringify(output.stderr, null, 2)}</code></pre>
+      {/if}
+    </div>
+  {/if}
+{/snippet}
+
 <style>
   .brand {
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 18px 16px;
+    /* Extra top clearance: with titleBarStyle "Overlay" the traffic lights
+       float directly over this row instead of sitting in their own strip. */
+    padding: 30px 16px 18px;
   }
 
   .app-shell.sidebar-collapsed .brand {
@@ -1268,7 +1386,9 @@
     align-items: center;
     justify-content: space-between;
     gap: 16px;
-    padding: 18px 22px;
+    /* Top padding approximates .brand's traffic-light clearance so both
+       header rows line up on the same baseline. */
+    padding: 25px 22px 18px;
     border-bottom: 1px solid var(--border);
     background: var(--background);
   }
@@ -1406,6 +1526,7 @@
 
   .profiles-layout {
     display: grid;
+    flex: 1;
     grid-template-columns: minmax(220px, 0.34fr) minmax(0, 1fr);
     gap: 16px;
     padding: 22px;
@@ -1440,6 +1561,10 @@
     font-size: 1rem;
   }
 
+  .field small.field-error {
+    color: var(--warning);
+  }
+
   .editor {
     display: grid;
     gap: 16px;
@@ -1467,6 +1592,20 @@
     align-items: center;
     justify-content: space-between;
     gap: 12px;
+  }
+
+  .input-with-action {
+    display: flex;
+    gap: 8px;
+  }
+
+  .input-with-action .input {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .input-with-action .btn {
+    flex-shrink: 0;
   }
 
   .field-head span {
@@ -1585,6 +1724,17 @@
     padding: 12px;
   }
 
+  .diagnostics-report {
+    display: grid;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+
+  .diagnostics-grid {
+    display: grid;
+    gap: 6px;
+  }
+
   .command-preview pre {
     margin: 0;
     white-space: pre-wrap;
@@ -1633,7 +1783,13 @@
   }
 
   .modal {
+    /* WKWebView doesn't reliably apply the UA's default dialog:modal
+       centering (margin: auto within a fixed inset), so it's forced here. */
+    position: fixed;
+    inset: 0;
+    margin: auto;
     width: min(460px, calc(100% - 40px));
+    max-height: calc(100% - 40px);
     border: 1px solid var(--border);
     background: var(--card);
     color: var(--card-foreground);
@@ -1643,6 +1799,20 @@
   .modal form {
     display: grid;
     gap: 14px;
+  }
+
+  .modal-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .modal-head h3 {
+    margin: 0;
+  }
+
+  .modal .row-actions {
+    justify-content: flex-end;
   }
 
   .modal::backdrop {

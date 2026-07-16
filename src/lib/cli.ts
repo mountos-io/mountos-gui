@@ -76,9 +76,32 @@ export function backendNeedsMountPath(backend: Backend): boolean {
   return backend !== 'fileprovider' && backend !== 'cloudfilter'
 }
 
-const FSKIT_MOUNT_PREFIX = '/Volumes/MountOS/'
+// Accepts a Unix absolute path or a Windows drive-letter path (bare "C:",
+// "C:\", "C:/", or "C:\..."/"C:/..."), regardless of which OS this build is
+// running on — the authoritative, OS-specific check lives in Rust's
+// is_openable_target; this is only for immediate UI feedback.
+export function isAbsolutePath(path: string): boolean {
+  return path.startsWith('/') || /^[A-Za-z]:[\\/]?$/.test(path) || /^[A-Za-z]:[\\/]/.test(path)
+}
+
+export const FSKIT_MOUNT_PREFIX = '/Volumes/MountOS/'
+
+// A "folder name" here means one path segment: no separators (either OS's),
+// no control bytes, and not a literal "." or ".." alias. Only relevant when
+// the value is used to build a filesystem path (FSKit's volume name doubles
+// as the mount point's leaf folder); other backends just pass it to --volname.
+export function isValidFolderName(name: string): boolean {
+  if (!name || name === '.' || name === '..') return false
+  return !/[/\\\x00-\x1f]/.test(name)
+}
 
 export function validateMountPathForBackend(backend: Backend, mountPath: string): string | null {
+  if (!backendNeedsMountPath(backend)) return null
+  // Empty stays legal: buildMountArgv omits -m and the mountos CLI picks its
+  // own default. A non-empty value has to actually be an absolute path.
+  if (mountPath && !isAbsolutePath(mountPath)) {
+    return 'Mount path must be an absolute filesystem path'
+  }
   if (backend !== 'fskit') return null
   const trimmed = mountPath.replace(/\/+$/, '')
   if (!trimmed.startsWith(FSKIT_MOUNT_PREFIX) || trimmed.length <= FSKIT_MOUNT_PREFIX.length) {

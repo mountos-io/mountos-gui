@@ -93,8 +93,36 @@ export interface ExportedProfile {
   path: string
 }
 
+export interface DiagnosticsCommandOutput {
+  status: number | null
+  stdout: unknown
+  stderr: unknown
+}
+
+export interface DiagnosticsProfileSummary {
+  id: string
+  name: string
+  kind: string
+  mountPath: string
+  discoveryUrl: string
+  backend: Backend
+  secretRef: SecretRef
+  extraArgsCount: number
+  autoRemount: boolean
+}
+
+export interface DiagnosticsContent {
+  createdAtUnix: number
+  cliPath?: string
+  cliVersion?: string
+  check?: DiagnosticsCommandOutput
+  list?: DiagnosticsCommandOutput
+  profiles: DiagnosticsProfileSummary[]
+}
+
 export interface DiagnosticsBundle {
   path: string
+  content?: DiagnosticsContent
 }
 
 export interface MountResult {
