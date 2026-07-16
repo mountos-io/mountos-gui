@@ -215,6 +215,12 @@ struct UnmountResult {
     target: String,
 }
 
+#[derive(Debug, Serialize)]
+struct UnmountAllResult {
+    attempted: usize,
+    failed: Vec<String>,
+}
+
 const KEYRING_SERVICE: &str = "sh.mountos.desktop";
 const ACCESS_KEY_ID_LENGTH: usize = 20;
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(65);
@@ -1434,6 +1440,68 @@ async fn unmount_target(target: String) -> Result<UnmountResult, DesktopError> {
         .map_err(|error| DesktopError::Message(format!("unmount task failed: {error}")))?
 }
 
+fn list_active_targets() -> Result<Vec<String>, DesktopError> {
+    let output = command_output(&["list", "--json"])?;
+    if !output.status.success() {
+        return Err(DesktopError::Message(format!(
+            "mountos list failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    let value = serde_json::from_slice::<Value>(&output.stdout)?;
+    let entries = value
+        .as_array()
+        .cloned()
+        .or_else(|| value.get("mounts").and_then(Value::as_array).cloned())
+        .unwrap_or_default();
+    Ok(entries
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .get("domainId")
+                .and_then(Value::as_str)
+                .or_else(|| entry.get("mountPath").and_then(Value::as_str))
+                .map(ToString::to_string)
+        })
+        .collect())
+}
+
+// unmount --all is one shell-out for the whole fleet rather than N individual
+// unmount_target calls: the CLI's own combined confirmation-free (-y) batch
+// unmount is both faster (no N separate process spawns) and matches the CLI's
+// own --all semantics exactly. Success/failure per target isn't parsed out of
+// CLI text (fragile); instead the active target list is diffed before/after —
+// anything still present after the call didn't unmount.
+fn unmount_all_targets_blocking() -> Result<UnmountAllResult, DesktopError> {
+    let before = list_active_targets()?;
+    if before.is_empty() {
+        return Ok(UnmountAllResult {
+            attempted: 0,
+            failed: Vec::new(),
+        });
+    }
+    let _ = Command::new(mountos_path()?)
+        .args(["unmount", "--all", "-y"])
+        .output()?;
+    let after = list_active_targets()?;
+    let failed: Vec<String> = before
+        .iter()
+        .filter(|target| after.iter().any(|remaining| remaining == *target))
+        .cloned()
+        .collect();
+    Ok(UnmountAllResult {
+        attempted: before.len(),
+        failed,
+    })
+}
+
+#[tauri::command]
+async fn unmount_all_targets() -> Result<UnmountAllResult, DesktopError> {
+    tauri::async_runtime::spawn_blocking(unmount_all_targets_blocking)
+        .await
+        .map_err(|error| DesktopError::Message(format!("unmount-all task failed: {error}")))?
+}
+
 // Reads .mountOS/.config directly off disk rather than shelling out — it's
 // a plain JSON file the mfuse process already writes for its own TUI/CLI
 // tooling (cmd/mfuse/reserved.go getConfigData), so no extra CLI round
@@ -1488,8 +1556,16 @@ fn spawn_dashboard_terminal(mountos: &Path, target: &str, gui: bool) -> Result<(
     shell_cmd.push(' ');
     shell_cmd.push_str(&shell_quote(target));
 
+    // Two `do script` calls, not one: sending the real command to a cold-launched
+    // Terminal (no windows yet) can race the new window's shell coming up and the
+    // typed text is silently dropped, leaving an empty window. Forcing a window to
+    // exist first (an empty `do script`) and then targeting it explicitly for the
+    // real command avoids that race. The column/row resize (before the real command
+    // runs) works around Terminal's default new-window size (83x24) being smaller
+    // than the dashboard TUI's own minimum (118x35), which otherwise replaces the
+    // dashboard with a "Terminal too small" placeholder instead of rendering it.
     let script = format!(
-        "tell application \"Terminal\"\n  activate\n  do script {}\nend tell",
+        "tell application \"Terminal\"\n  activate\n  if (count of windows) = 0 then\n    do script \"\"\n  end if\n  set number of columns of front window to 140\n  set number of rows of front window to 42\n  do script {} in front window\nend tell",
         applescript_quote(&shell_cmd)
     );
     // .output(), not .spawn(): `do script` is a synchronous AppleEvent that
@@ -1518,29 +1594,30 @@ fn spawn_dashboard_terminal(mountos: &Path, target: &str, gui: bool) -> Result<(
 
 #[cfg(windows)]
 fn spawn_dashboard_terminal(mountos: &Path, target: &str, gui: bool) -> Result<(), DesktopError> {
-    let mut args: Vec<String> = vec!["dashboard".to_string()];
+    let mut shell_cmd = format!("mode con: cols=140 lines=42 && \"{}\" dashboard", mountos.display());
     if gui {
-        args.push("--gui".to_string());
+        shell_cmd.push_str(" --gui");
     }
-    args.push(target.to_string());
+    shell_cmd.push_str(&format!(" \"{target}\""));
 
     // Prefer Windows Terminal (the Win11 default host) when installed; cmd
     // /k always works and, like Terminal.app's do script, keeps the window
-    // open after the command finishes.
+    // open after the command finishes. `mode con` resizes the console before
+    // the dashboard TUI starts — its own minimum size (118x35) is larger
+    // than cmd/wt's default new-window/new-tab size, which otherwise shows
+    // a "Terminal too small" placeholder instead of the dashboard (mirrors
+    // the same fix applied to Terminal.app on macOS).
     if let Ok(wt) = which::which("wt") {
         Command::new(wt)
+            .arg("--size")
+            .arg("140,42")
             .arg("new-tab")
             .arg("cmd")
             .arg("/k")
-            .arg(mountos)
-            .args(&args)
+            .arg(&shell_cmd)
             .spawn()?;
     } else {
-        Command::new("cmd")
-            .arg("/k")
-            .arg(mountos)
-            .args(&args)
-            .spawn()?;
+        Command::new("cmd").arg("/k").arg(&shell_cmd).spawn()?;
     }
     Ok(())
 }
@@ -1840,6 +1917,7 @@ pub fn run() {
             get_profile_secret_status,
             mount_profile,
             unmount_target,
+            unmount_all_targets,
             open_target,
             get_instance_config,
             launch_dashboard,

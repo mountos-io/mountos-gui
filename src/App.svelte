@@ -58,6 +58,7 @@
     saveSettings,
     setProfileSecret,
     unmountTarget,
+    unmountAllTargets,
   } from './lib/tauri'
   import type { Backend, DesktopSettings, DiagnosticsBundle, DiagnosticsCommandOutput, MountInstance, MountProfile, SystemState } from './lib/types'
 
@@ -87,6 +88,8 @@
   let secretDialog = $state<HTMLDialogElement | undefined>()
   let deletePromptFor = $state<MountProfile | null>(null)
   let deleteDialog = $state<HTMLDialogElement | undefined>()
+  let unmountPromptFor = $state<MountInstance | 'all' | null>(null)
+  let unmountDialog = $state<HTMLDialogElement | undefined>()
   let settings = $state<DesktopSettings>({ defaultBackend: 'auto' })
   let vaultStatus = $state<Record<string, boolean>>({})
   let diagnosticsBundle = $state<DiagnosticsBundle | null>(null)
@@ -442,6 +445,63 @@
     }
   }
 
+  async function runUnmountAll() {
+    const keys = systemState.instances.map((instance) => instance.key)
+    if (keys.length === 0) return
+    busy = true
+    for (const key of keys) expectedGone.add(key)
+    try {
+      const result = await unmountAllTargets()
+      for (const failedTarget of result.failed) expectedGone.delete(failedTarget)
+      await refresh(false)
+      if (result.failed.length === 0) {
+        notify(`Unmounted all ${result.attempted} mounts`)
+      } else {
+        notify(`Unmounted ${result.attempted - result.failed.length} of ${result.attempted}; ${result.failed.length} failed`, 'error')
+      }
+    } catch (error) {
+      for (const key of keys) expectedGone.delete(key)
+      notify(error instanceof Error ? error.message : 'Unmount all failed', 'error')
+    } finally {
+      busy = false
+    }
+  }
+
+  function requestUnmount(instance: MountInstance) {
+    if (skipUnmountConfirm) {
+      void runUnmount(instance)
+    } else {
+      unmountPromptFor = instance
+    }
+  }
+
+  function requestUnmountAll() {
+    if (systemState.instances.length === 0) return
+    if (skipUnmountConfirm) {
+      void runUnmountAll()
+    } else {
+      unmountPromptFor = 'all'
+    }
+  }
+
+  function cancelUnmountPrompt() {
+    unmountPromptFor = null
+  }
+
+  async function confirmUnmountPrompt() {
+    const target = unmountPromptFor
+    unmountPromptFor = null
+    if (target === 'all') await runUnmountAll()
+    else if (target) await runUnmount(target)
+  }
+
+  $effect(() => {
+    const dialog = unmountDialog
+    if (!dialog) return
+    if (unmountPromptFor && !dialog.open) dialog.showModal()
+    else if (!unmountPromptFor && dialog.open) dialog.close()
+  })
+
   async function runOpen(instance: MountInstance) {
     try {
       await openTarget(instance.mountPath)
@@ -548,6 +608,17 @@
   function toggleSidebar() {
     sidebarCollapsed = !sidebarCollapsed
     if (typeof localStorage !== 'undefined') localStorage.setItem('mountos-desktop-sidebar-collapsed', String(sidebarCollapsed))
+  }
+
+  function initialSkipUnmountConfirm() {
+    if (typeof localStorage === 'undefined') return false
+    return localStorage.getItem('mountos-desktop-skip-unmount-confirm') === 'true'
+  }
+  let skipUnmountConfirm = $state(initialSkipUnmountConfirm())
+
+  function setSkipUnmountConfirm(next: boolean) {
+    skipUnmountConfirm = next
+    if (typeof localStorage !== 'undefined') localStorage.setItem('mountos-desktop-skip-unmount-confirm', String(next))
   }
 
   $effect(() => {
@@ -721,6 +792,7 @@
       </div>
     </header>
 
+    <div class="main-content">
     {#if message}
       <div class="notice" class:error={messageKind === 'error'} role={messageKind === 'error' ? 'alert' : 'status'}>
         <span>{message}</span>
@@ -739,6 +811,15 @@
             {#if limitedCount > 0}
               <span class="badge warning">{limitedCount} limited</span>
             {/if}
+            <button
+              class="btn destructive"
+              type="button"
+              disabled={busy || systemState.instances.length === 0}
+              onclick={requestUnmountAll}
+            >
+              <Unplug size={16} aria-hidden="true" />
+              Unmount all
+            </button>
           </div>
         </div>
         <div class="table-wrap">
@@ -811,7 +892,7 @@
                           <FilePlus size={16} aria-hidden="true" />
                         </button>
                       {/if}
-                      <button class="btn icon-btn destructive" type="button" title="Unmount" aria-label="Unmount" disabled={busy} onclick={() => runUnmount(instance)}>
+                      <button class="btn icon-btn destructive" type="button" title="Unmount" aria-label="Unmount" disabled={busy} onclick={() => requestUnmount(instance)}>
                         <Unplug size={16} aria-hidden="true" />
                       </button>
                     </div>
@@ -1157,6 +1238,10 @@
             onchange={(e) => changeDefaultDiscoveryUrl(e.currentTarget.value)}
           />
         </label>
+        <label class="setting-row">
+          <span><strong>Skip unmount confirmation</strong>{@render Hint('Unmount and Unmount all act immediately, with no confirmation dialog.')}</span>
+          <input type="checkbox" checked={skipUnmountConfirm} onchange={(e) => setSkipUnmountConfirm(e.currentTarget.checked)} />
+        </label>
       </section>
 
       <section class="surface panel settings-panel">
@@ -1217,6 +1302,7 @@
         {/if}
       </section>
     {/if}
+    </div>
   </main>
 </div>
 
@@ -1259,6 +1345,26 @@
       <div class="row-actions">
         <button class="btn" type="button" onclick={cancelDelete}>Cancel</button>
         <button class="btn destructive" type="submit" disabled={busy}>Delete</button>
+      </div>
+    </form>
+  {/if}
+</dialog>
+
+<dialog class="modal" bind:this={unmountDialog} onclose={cancelUnmountPrompt} aria-labelledby="unmount-dialog-title">
+  {#if unmountPromptFor}
+    <form onsubmit={(event) => { event.preventDefault(); void confirmUnmountPrompt() }}>
+      <div class="modal-head">
+        <Unplug size={20} aria-hidden="true" />
+        <h3 id="unmount-dialog-title">{unmountPromptFor === 'all' ? 'Unmount all mounts' : 'Unmount'}</h3>
+      </div>
+      {#if unmountPromptFor === 'all'}
+        <p>Unmount all {systemState.instances.length} running mounts? Each stops flushing in the background once unmounted.</p>
+      {:else}
+        <p>Unmount "{unmountPromptFor.name || unmountPromptFor.mountPath}"? It stops flushing in the background once unmounted.</p>
+      {/if}
+      <div class="row-actions">
+        <button class="btn" type="button" onclick={cancelUnmountPrompt}>Cancel</button>
+        <button class="btn destructive" type="submit" disabled={busy}>Unmount</button>
       </div>
     </form>
   {/if}

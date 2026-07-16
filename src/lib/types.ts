@@ -134,3 +134,8 @@ export interface UnmountResult {
   state: 'idle' | 'flushing'
   target: string
 }
+
+export interface UnmountAllResult {
+  attempted: number
+  failed: string[]
+}

@@ -9,6 +9,7 @@ import type {
   SecretStatus,
   SystemState,
   UnmountResult,
+  UnmountAllResult,
 } from './types'
 
 export function hasDesktopBridge(): boolean {
@@ -121,6 +122,11 @@ export async function mountProfile(profileId: string, secret?: string): Promise<
 export async function unmountTarget(target: string): Promise<UnmountResult> {
   if (!hasDesktopBridge()) throw new Error('Desktop bridge unavailable')
   return invoke<UnmountResult>('unmount_target', { target })
+}
+
+export async function unmountAllTargets(): Promise<UnmountAllResult> {
+  if (!hasDesktopBridge()) throw new Error('Desktop bridge unavailable')
+  return invoke<UnmountAllResult>('unmount_all_targets')
 }
 
 export async function openTarget(target: string): Promise<void> {
