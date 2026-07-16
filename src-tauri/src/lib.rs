@@ -1808,7 +1808,13 @@ fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             None::<&str>,
         )?));
     } else {
-        for instance in &instances {
+        // A menubar dropdown listing every mount doesn't scale — cap it and
+        // fold the rest into a single "+N more" item that opens the full app
+        // (same id as "Open mountOS" below, same action) instead of growing
+        // the native menu unboundedly.
+        const MAX_MOUNT_ITEMS: usize = 15;
+        let total = instances.len();
+        for instance in instances.iter().take(MAX_MOUNT_ITEMS) {
             let label = if instance.name.is_empty() {
                 instance.mount_path.clone()
             } else {
@@ -1819,6 +1825,16 @@ fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
                 format!("open-mount:{}", instance.mount_path),
                 format!("{label} \u{2014} {}", instance.health),
                 is_openable_target(&instance.mount_path),
+                None::<&str>,
+            )?));
+        }
+        if total > MAX_MOUNT_ITEMS {
+            let remaining = total - MAX_MOUNT_ITEMS;
+            items.push(Box::new(MenuItem::with_id(
+                app,
+                "show",
+                format!("+{remaining} more"),
+                true,
                 None::<&str>,
             )?));
         }
