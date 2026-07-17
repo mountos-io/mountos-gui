@@ -198,6 +198,10 @@ struct ExportedProfile {
 #[serde(rename_all = "camelCase")]
 struct DesktopSettings {
     default_backend: Backend,
+    // How often the mount list is refreshed while the window is visible, in
+    // seconds. None means the default. A hidden window always backs off
+    // regardless (see the poll effect).
+    poll_seconds: Option<u32>,
     // Terminal emulator id for the dashboard launcher (see KNOWN_TERMINALS).
     // None means the platform's stock terminal. A pinned terminal that is no
     // longer installed silently falls back rather than failing: it is a
@@ -220,6 +224,7 @@ impl Default for DesktopSettings {
             default_backend: Backend::Auto,
             default_discovery_url: None,
             cli_path_override: None,
+            poll_seconds: None,
             terminal: None,
         }
     }
@@ -1079,6 +1084,16 @@ fn get_settings(app: AppHandle) -> Result<DesktopSettings, DesktopError> {
 #[tauri::command]
 fn save_settings(app: AppHandle, settings: DesktopSettings) -> Result<DesktopSettings, DesktopError> {
     validate_backend_for_platform(&settings.default_backend)?;
+    // Bounded here, not just in the picker: settings.json is a plain file a user
+    // can hand-edit, and 0 would busy-loop the CLI while a huge value would look
+    // like the list had frozen.
+    if let Some(seconds) = settings.poll_seconds {
+        if !(1..=3600).contains(&seconds) {
+            return Err(DesktopError::Message(format!(
+                "refresh interval must be between 1 and 3600 seconds, got {seconds}"
+            )));
+        }
+    }
     if let Some(pinned) = &settings.cli_path_override {
         if !PathBuf::from(pinned).is_file() {
             return Err(DesktopError::Message(format!(

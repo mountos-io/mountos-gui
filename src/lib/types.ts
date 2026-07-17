@@ -98,6 +98,9 @@ export interface DesktopSettings {
   // set, a moved/missing pinned binary is a hard error rather than a
   // silent fallback to a different install.
   cliPathOverride?: string
+  // How often the mount list refreshes while the window is visible, in seconds.
+  // Undefined means the default. A hidden window backs off regardless.
+  pollSeconds?: number
   // Terminal emulator id for the dashboard launcher. Empty/undefined means the
   // platform's stock terminal. Unlike cliPathOverride this is a preference, not
   // a pin: an uninstalled choice falls back instead of failing.

@@ -118,6 +118,12 @@
   // status about things that happened on their own, and clear themselves.
   const NOTICE_AUTO_DISMISS_MS = 6000
 
+  // Mount-list refresh cadence. The options are fixed rather than a free number
+  // field: the useful range is small, and a typo'd 0 would hammer the CLI.
+  const DEFAULT_POLL_SECONDS = 5
+  const HIDDEN_POLL_MS = 30_000
+  const POLL_CHOICES = [2, 5, 10, 30, 60]
+
   function notify(text: string, kind: 'info' | 'warn' | 'error' = 'info') {
     message = text
     messageKind = kind
@@ -214,13 +220,41 @@
     updatePreview(profile)
   }
 
-  function saveAsProfile(instance: MountInstance) {
-    newProfile({
+  // Read back everything the mount records about itself rather than making the
+  // user retype it. Only the secret cannot come from here (by design -- the
+  // config stores the access key id, which is an identifier, never the secret).
+  async function saveAsProfile(instance: MountInstance) {
+    const preset: Partial<MountProfile> = {
       name: instance.name || 'External mount',
       volume: instance.name ?? '',
       mountPath: instance.mountPath,
-    })
-    notify('Profile created from the running mount. Add the discovery URL and credentials, then save.')
+      readOnly: instance.viewMode === 'ro',
+    }
+    // Only adopt a backend the profile editor can actually offer on this
+    // platform: `mountos list` reports the transport in use (e.g. "fuse" on
+    // Linux), which is not always one of the mount flags.
+    if (instance.backend && backends.includes(instance.backend)) {
+      preset.backend = instance.backend
+    }
+    try {
+      const config = JSON.parse(await getInstanceConfig(instance.mountPath))
+      if (typeof config.discoveryUrl === 'string' && config.discoveryUrl) {
+        preset.discoveryUrl = config.discoveryUrl
+      }
+      // volumeName is what was actually passed as --volname; the row's name can
+      // be a display fallback.
+      if (typeof config.volumeName === 'string' && config.volumeName) {
+        preset.volume = config.volumeName
+      }
+      if (typeof config.accessId === 'string' && config.accessId) {
+        preset.accessKeyId = config.accessId
+      }
+    } catch {
+      // Unreadable config (e.g. the mount's daemon is gone): keep what the row
+      // already knows rather than failing the whole action.
+    }
+    newProfile(preset)
+    notify('Profile created from the running mount. Add the secret, then save.')
   }
 
   function duplicateSelected() {
@@ -691,6 +725,15 @@
     }
   }
 
+  async function changePollSeconds(seconds: number) {
+    try {
+      settings = await saveSettings({ ...settings, pollSeconds: seconds })
+      notify(`Mount list refreshes every ${seconds}s`)
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Failed to save settings', 'error')
+    }
+  }
+
   async function changeTerminal(terminal: string) {
     try {
       // Empty string is the "System default" option: store it as undefined so
@@ -765,12 +808,19 @@
   })
 
   $effect(() => {
+    // Read inside the effect so changing the setting reschedules immediately
+    // rather than waiting for a restart.
+    const visibleMs = (settings.pollSeconds ?? DEFAULT_POLL_SECONDS) * 1000
+    // A hidden window always backs off, but never polls more often than the
+    // user asked for: someone who picked 60s does not want 30s in the
+    // background.
+    const hiddenMs = Math.max(HIDDEN_POLL_MS, visibleMs)
     let timer: ReturnType<typeof setInterval> | undefined
     const schedule = () => {
       clearInterval(timer)
       timer = setInterval(() => {
         void pollSystem()
-      }, document.hidden ? 30_000 : 5_000)
+      }, document.hidden ? hiddenMs : visibleMs)
     }
     schedule()
     document.addEventListener('visibilitychange', schedule)
@@ -1212,6 +1262,14 @@
           <span><strong>Default backend</strong>{@render Hint("Applied to new profiles. Auto follows the CLI's platform order.")}</span>
           <select class="select setting-select" value={settings.defaultBackend} onchange={(e) => changeDefaultBackend(e.currentTarget.value as Backend)}>
             {#each backends as backend}<option value={backend}>{backend}</option>{/each}
+          </select>
+        </label>
+        <label class="setting-row">
+          <span><strong>Refresh interval</strong>{@render Hint('How often the running mounts are re-read. A hidden window always backs off to at least 30s regardless.')}</span>
+          <select class="select setting-select" value={String(settings.pollSeconds ?? DEFAULT_POLL_SECONDS)} onchange={(e) => changePollSeconds(Number(e.currentTarget.value))}>
+            {#each POLL_CHOICES as seconds (seconds)}
+              <option value={String(seconds)}>{seconds}s{seconds === DEFAULT_POLL_SECONDS ? ' (default)' : ''}</option>
+            {/each}
           </select>
         </label>
         <label class="setting-row">
