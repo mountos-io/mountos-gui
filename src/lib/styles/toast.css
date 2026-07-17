@@ -1,0 +1,71 @@
+/* Maps svelte-sonner's toast types onto this app's own OKLCH tokens instead
+   of the Toaster's `richColors` built-in palette (a hardcoded palette
+   unrelated to --success/--warning/--destructive/--primary) -- keeps toasts
+   consistent with every other status color in the app (badges, callouts,
+   the .led health dot). Adapted from mountos-admin-client's toast.css,
+   dropping its cyberpunk clip-path chamfer and diagonal accent lines: this
+   app's plainer aesthetic uses a flat bordered box, matching <Callout>. */
+[data-sonner-toaster] [data-sonner-toast] {
+  border-radius: 0 !important;
+  border: 1px solid var(--border) !important;
+  background-color: var(--card) !important;
+  color: var(--card-foreground) !important;
+  font-family: inherit;
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-type="success"] {
+  border-color: oklch(from var(--success) l c h / 0.45) !important;
+  background-color: oklch(from var(--success) l c h / 0.1) !important;
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-type="error"] {
+  border-color: oklch(from var(--destructive) l c h / 0.45) !important;
+  background-color: oklch(from var(--destructive) l c h / 0.1) !important;
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-type="warning"] {
+  border-color: oklch(from var(--warning) l c h / 0.45) !important;
+  background-color: oklch(from var(--warning) l c h / 0.1) !important;
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-type="info"] {
+  --toast-accent: var(--primary);
+}
+
+[data-sonner-toast][data-type="success"] [data-icon] { color: var(--success) !important; }
+[data-sonner-toast][data-type="error"] [data-icon] { color: var(--destructive) !important; }
+[data-sonner-toast][data-type="warning"] [data-icon] { color: var(--warning) !important; }
+[data-sonner-toast][data-type="info"] [data-icon] { color: var(--primary) !important; }
+[data-sonner-toast][data-type="loading"] [data-icon] { color: var(--muted-foreground) !important; }
+
+[data-sonner-toaster] [data-sonner-toast] [data-title] {
+  font-weight: 550 !important;
+  color: var(--foreground) !important;
+  letter-spacing: -0.01em;
+}
+
+[data-sonner-toaster] [data-sonner-toast] [data-description] {
+  color: var(--muted-foreground) !important;
+}
+
+[data-sonner-toast] button[data-close-button] {
+  border: 1px solid var(--border) !important;
+  background: transparent !important;
+  color: var(--muted-foreground) !important;
+  border-radius: 0 !important;
+  min-width: 28px !important;
+  min-height: 28px !important;
+}
+
+[data-sonner-toast] button[data-close-button]:hover {
+  background: var(--accent) !important;
+  color: var(--accent-foreground) !important;
+  border-color: var(--accent-foreground) !important;
+}
+
+[data-sonner-toast] button[data-button] {
+  background: var(--primary) !important;
+  color: var(--primary-foreground) !important;
+  font-weight: 500;
+  border-radius: 0 !important;
+}

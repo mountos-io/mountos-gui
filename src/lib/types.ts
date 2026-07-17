@@ -33,6 +33,25 @@ export interface MountProfile {
   extraArgs: string[]
   createdAt: string
   updatedAt: string
+  // Detected once from the mounted volume's own `.mountOS/.volume-type` file,
+  // the first time this profile mounts successfully (or at creation time via
+  // Save-as-profile off an already-running external mount). Undefined until
+  // detected. Once set, the backend locks accessKeyId/discoveryUrl/volume
+  // against further edits (fork/backend stay editable) -- see
+  // require_stable_identity in src-tauri/src/lib.rs.
+  volumeKind?: 'general' | 'iceberg'
+}
+
+export interface Fork {
+  name: string
+  fid: number
+  parentName?: string
+  parentFid: number
+  createdAt?: number
+  inactiveAt?: number
+  childrenCount?: number
+  isTemporary?: boolean
+  inactive?: boolean
 }
 
 export interface MountInstance {
@@ -107,6 +126,12 @@ export interface DesktopSettings {
   // platform's stock terminal. Unlike cliPathOverride this is a preference, not
   // a pin: an uninstalled choice falls back instead of failing.
   terminal?: string
+  // Gates the Fork management surface (fork list/create/delete/restore) in
+  // the profile editor. Off by default: fork delete/restore mutate shared
+  // server-side volume state used by every other mount of the volume, not
+  // just this profile's. Required (not optional): Rust always emits this
+  // key via a plain bool + #[serde(default)], it just defaults to false.
+  advancedOpsEnabled: boolean
 }
 
 export interface ExportedProfile {
@@ -153,6 +178,21 @@ export interface MountResult {
 export interface UnmountResult {
   state: 'idle' | 'flushing'
   target: string
+}
+
+export interface GatewayEndpointInfo {
+  protocol: string
+  url: string
+  region?: string
+}
+
+export interface GatewayLaunchResult {
+  state: 'ready' | 'indeterminate'
+  // Discovered from the gateway descriptor file (best-effort); absent means
+  // the descriptor wasn't found, not that the launch failed. No PID means no
+  // Stop-gateway action can be offered for it.
+  pid?: number
+  endpoints: GatewayEndpointInfo[]
 }
 
 export interface UnmountAllResult {

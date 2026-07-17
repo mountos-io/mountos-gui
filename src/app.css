@@ -1,3 +1,11 @@
+@import "tailwindcss";
+
+@import "tw-animate-css";
+@import "./lib/styles/toast.css";
+@import "./lib/styles/corner-brackets.css";
+
+@custom-variant dark (&:is(.dark *));
+
 :root {
   color-scheme: light;
   --radius: 0.25rem;
@@ -17,6 +25,11 @@
   --accent: oklch(0.92 0.06 80);
   --accent-foreground: oklch(0.12 0 0);
   --destructive: oklch(0.54 0.24 24.42);
+  /* No translucent tint of --destructive over any surface in this app clears
+     4.5:1 at any opacity (computed: 4.78:1 at 0%, already under 4.5 by 4%) --
+     a solid fill needs its own foreground rather than reusing --destructive
+     as both the fill and the text color. */
+  --destructive-foreground: oklch(1 0 0);
   --warning: oklch(0.45 0.16 55);
   --success: oklch(0.49 0.17 155);
   --border: oklch(0.88 0 0);
@@ -35,6 +48,8 @@
   --pastel-node-text: oklch(0.50 0.15 125);
   --pastel-region: oklch(0.72 0.15 310);
   --pastel-region-text: oklch(0.50 0.15 310);
+  --pastel-cloudfilter: oklch(0.72 0.15 250);
+  --pastel-cloudfilter-text: oklch(0.50 0.15 250);
 }
 
 .dark {
@@ -59,6 +74,7 @@
   --accent: oklch(0.16 0.008 200);
   --accent-foreground: oklch(0.93 0.005 200);
   --destructive: oklch(0.59 0.2 21);
+  --destructive-foreground: oklch(1 0 0);
   --warning: oklch(0.78 0.15 75);
   --success: oklch(0.65 0.19 155);
   --border: oklch(0.21 0.008 200);
@@ -77,6 +93,59 @@
   --pastel-node-text: oklch(0.70 0.16 125);
   --pastel-region: oklch(0.70 0.16 310);
   --pastel-region-text: oklch(0.70 0.16 310);
+  --pastel-cloudfilter: oklch(0.70 0.16 250);
+  --pastel-cloudfilter-text: oklch(0.70 0.16 250);
+}
+
+/* Maps Tailwind's utility classes (bg-card, border-border, text-muted-foreground,
+   rounded-lg, text-sm, ...) onto this file's own OKLCH custom properties above,
+   the same "@theme inline" pattern mountos-admin-client uses (identical token
+   values -- DESIGN.md's mirroring claim, verified) -- so new markup can reach
+   for Tailwind utilities without a second, disconnected color system. Only maps
+   tokens that actually exist above; admin-client's sidebar/chart/extra
+   -foreground tokens aren't defined here and are deliberately left out rather
+   than referencing an undefined variable. */
+@theme inline {
+  --text-xs: 1rem;
+  --text-xs--line-height: calc(1.5 / 1);
+  --text-sm: 1.0625rem;
+  --text-sm--line-height: calc(1.5 / 1.0625);
+  --text-base: 1.125rem;
+  --text-base--line-height: calc(1.75 / 1.125);
+  --text-lg: 1.25rem;
+  --text-lg--line-height: calc(1.75 / 1.25);
+  --text-xl: 1.5rem;
+  --text-xl--line-height: calc(2 / 1.5);
+  --text-2xl: 1.875rem;
+  --text-2xl--line-height: calc(2.25 / 1.875);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-label-foreground: var(--label-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-warning: var(--warning);
+  --color-success: var(--success);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
 }
 
 * {
@@ -94,6 +163,7 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, Menlo, monospace;
   font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   font-size: 1.0625rem;
   line-height: 1.6;
@@ -128,109 +198,51 @@ p {
   color: var(--muted-foreground);
 }
 
-:focus-visible {
-  border-radius: var(--radius);
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
-}
-
 ::selection {
   background: var(--primary);
   color: var(--primary-foreground);
-}
-
-/* minmax(0, 1fr), not 1fr: a bare 1fr track has an AUTO minimum, so the main
-   column refuses to shrink below its content's min-content width and overflows
-   the window instead (the profiles view is the trigger -- its own grid has a
-   220px minimum column plus the editor). .main's min-width: 0 cannot rescue
-   this: the floor is on the track, not the item. */
-.app-shell {
-  display: grid;
-  grid-template-columns: 14.5rem minmax(0, 1fr);
-  height: 100%;
-  background: var(--background);
-  color: var(--foreground);
-  transition: grid-template-columns 200ms ease-out;
-}
-
-.app-shell.sidebar-collapsed {
-  grid-template-columns: 4.5rem minmax(0, 1fr);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .app-shell {
-    transition: none;
-  }
-}
-
-.sidebar {
-  display: flex;
-  flex-direction: column;
-  min-height: 100%;
-  border-right: 1px solid var(--border);
-  background: var(--card);
-  overflow: hidden;
-}
-
-.main {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-}
-
-/* Positioning context for the floating notice. Sits between the sticky topbar
-   and the scroll area so an overlaid notice covers neither the topbar nor the
-   sidebar. */
-.main-area {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  /* Both matter: min-height for the scroll area, min-width so this flex item
-     can shrink below its content instead of pushing wide layouts (the profiles
-     list + editor columns) out past the window. Mirrors .main. */
-  min-width: 0;
-  min-height: 0;
-}
-
-.main-content {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
 }
 
 /* Deliberately no scrollbar-width/scrollbar-color: those force a permanent
    Firefox-style bar in WebKit, overriding macOS's native overlay scrollbar
    (thin, auto-hides, appears on hover/scroll). Only the ::-webkit-scrollbar-*
    pseudo-elements are themed, which keeps that native show/hide behavior and
-   just recolors the thumb to the brand color when it's visible. */
-.main-content::-webkit-scrollbar,
-.table-wrap::-webkit-scrollbar,
-.list::-webkit-scrollbar {
+   just recolors the thumb to the brand color when it's visible. Matches
+   mountos-admin-client's own selector set (body, [data-slot="table-container"],
+   .overflow-y-auto/.overflow-x-auto), plus .overflow-auto: this app's own main
+   content pane, CommandPreview and the expanded mount-flags box all scroll
+   both axes via that one Tailwind class, which admin-client never uses. */
+body::-webkit-scrollbar,
+[data-slot="table-container"]::-webkit-scrollbar,
+.overflow-y-auto::-webkit-scrollbar,
+.overflow-x-auto::-webkit-scrollbar,
+.overflow-auto::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
-.main-content::-webkit-scrollbar-track,
-.table-wrap::-webkit-scrollbar-track,
-.list::-webkit-scrollbar-track {
+body::-webkit-scrollbar-track,
+[data-slot="table-container"]::-webkit-scrollbar-track,
+.overflow-y-auto::-webkit-scrollbar-track,
+.overflow-x-auto::-webkit-scrollbar-track,
+.overflow-auto::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.main-content::-webkit-scrollbar-thumb,
-.table-wrap::-webkit-scrollbar-thumb,
-.list::-webkit-scrollbar-thumb {
+body::-webkit-scrollbar-thumb,
+[data-slot="table-container"]::-webkit-scrollbar-thumb,
+.overflow-y-auto::-webkit-scrollbar-thumb,
+.overflow-x-auto::-webkit-scrollbar-thumb,
+.overflow-auto::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
   border-radius: 4px;
 }
 
-.main-content::-webkit-scrollbar-thumb:hover,
-.table-wrap::-webkit-scrollbar-thumb:hover,
-.list::-webkit-scrollbar-thumb:hover {
+body::-webkit-scrollbar-thumb:hover,
+[data-slot="table-container"]::-webkit-scrollbar-thumb:hover,
+.overflow-y-auto::-webkit-scrollbar-thumb:hover,
+.overflow-x-auto::-webkit-scrollbar-thumb:hover,
+.overflow-auto::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-thumb);
   opacity: 0.8;
 }
@@ -248,10 +260,10 @@ p {
 }
 
 /* 1rem, not 0.7rem: PRODUCT.md sets a 16px floor for all UI text and this label
-   (and .table th, which mirrors it) was 11.2px. Tracking drops 0.2em -> 0.1em
-   at the same time: 0.2em was tuned for 11px, and tracking is relative to size,
-   so carrying it up to 16px would push every label ~45% wider for no legibility
-   gain. The wide-tracked uppercase character survives; only the excess goes. */
+   was 11.2px. Tracking drops 0.2em -> 0.1em at the same time: 0.2em was tuned
+   for 11px, and tracking is relative to size, so carrying it up to 16px would
+   push every label ~45% wider for no legibility gain. The wide-tracked
+   uppercase character survives; only the excess goes. */
 .mono-label {
   color: var(--label-foreground);
   font-family: ui-monospace, Menlo, monospace;
@@ -260,133 +272,6 @@ p {
   letter-spacing: 0.1em;
   line-height: 1.4;
   text-transform: uppercase;
-}
-
-.btn {
-  display: inline-flex;
-  min-width: 44px;
-  min-height: 36px;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  border: 1px solid var(--border);
-  border-radius: 0;
-  background: transparent;
-  color: var(--foreground);
-  cursor: pointer;
-  font-size: 1rem;
-  font-weight: 500;
-  padding: 7px 14px;
-  transition: background-color 150ms, border-color 150ms, color 150ms, transform 150ms, opacity 150ms;
-}
-
-.btn:hover {
-  border-color: oklch(from var(--foreground) l c h / 0.4);
-  background: var(--accent);
-}
-
-.btn:active {
-  border-color: oklch(from var(--primary) l c h / 0.3);
-  background: oklch(from var(--primary) l c h / 0.1);
-  transform: scale(0.98);
-}
-
-/* :hover/:active never match a disabled form control per spec, so this is
-   the only rule needed — no separate override to neutralize them. */
-.btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.btn.primary {
-  border-color: var(--primary);
-  background: var(--primary);
-  color: var(--primary-foreground);
-  /* Steeper variant of the brand mark's chamfer (structural signature, DESIGN.md §5) */
-  clip-path: polygon(0 12px, 12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%);
-}
-
-.btn.primary:hover {
-  background: oklch(from var(--primary) l c h / 0.9);
-}
-
-.btn.ghost {
-  border-color: transparent;
-}
-
-.btn.destructive {
-  border-color: var(--destructive);
-  color: var(--destructive);
-}
-
-.btn.destructive:hover {
-  background: oklch(from var(--destructive) l c h / 0.1);
-}
-
-.icon-btn {
-  width: 36px;
-  height: 36px;
-  padding: 0;
-}
-
-.input,
-.select,
-.textarea {
-  width: 100%;
-  min-height: 36px;
-  border: 1px solid var(--border);
-  border-radius: 0;
-  background: var(--input);
-  color: var(--foreground);
-  font-size: 1.0625rem;
-  letter-spacing: 0;
-  outline: none;
-  padding: 7px 10px;
-}
-
-.textarea {
-  min-height: 82px;
-  resize: vertical;
-}
-
-.input::placeholder,
-.textarea::placeholder {
-  color: var(--muted-foreground);
-}
-
-.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 24px;
-  border: 1px solid var(--border);
-  border-radius: 2px;
-  color: var(--muted-foreground);
-  font-size: 1rem;
-  font-weight: 500;
-  line-height: 1;
-  padding: 2px 8px;
-}
-
-.badge.success {
-  border-color: oklch(from var(--success) l c h / 0.45);
-  color: var(--success);
-}
-
-.badge.warning {
-  border-color: oklch(from var(--warning) l c h / 0.45);
-  color: var(--warning);
-}
-
-.badge.destructive {
-  border-color: oklch(from var(--destructive) l c h / 0.45);
-  color: var(--destructive);
-}
-
-.badge.mount {
-  border-color: oklch(from var(--pastel-mount) l c h / 0.45);
-  background: oklch(from var(--pastel-mount) l c h / 0.14);
-  color: var(--pastel-mount-text);
 }
 
 .led {
@@ -409,106 +294,16 @@ p {
   box-shadow: none;
 }
 
-.table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 1.0625rem;
-}
-
-.table th {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  border-bottom: 1px solid oklch(from var(--foreground) l c h / 0.18);
-  background: var(--card);
-  color: var(--label-foreground);
-  font-family: ui-monospace, Menlo, monospace;
-  /* Mirrors .mono-label deliberately -- see the 16px-floor note there. */
-  font-size: 1rem;
-  font-weight: 400;
-  letter-spacing: 0.1em;
-  padding: 8px;
-  text-align: left;
-  text-transform: uppercase;
-}
-
-.table td {
-  border-bottom: 1px solid var(--border);
-  padding: 10px 8px;
-  vertical-align: middle;
-}
-
-/* Name and Target hold volume names and mount paths: long, and with no spaces
-   to break at. Fold them mid-token so the whole value stays readable and the
-   row grows downward, instead of the cell forcing the table wider than the
-   window. The later columns are short and fixed, so they keep their width. */
-.table td:nth-child(1),
-.table td:nth-child(2) {
-  overflow-wrap: anywhere;
-}
-
-.corner-brackets {
-  position: relative;
-}
-
-.corner-brackets::before,
-.corner-brackets::after {
-  content: "";
-  position: absolute;
-  width: 22px;
-  height: 22px;
-  pointer-events: none;
-  opacity: 0.85;
-}
-
-.corner-brackets::before {
-  left: -2px;
-  top: -2px;
-  border-left: 2px solid var(--ring);
-  border-top: 2px solid var(--ring);
-}
-
-.corner-brackets::after {
-  right: -2px;
-  bottom: -2px;
-  border-right: 2px solid var(--ring);
-  border-bottom: 2px solid var(--ring);
-}
-
-/* Sanctioned pattern (DESIGN.md §5): dual-gradient 20px grid backdrop for
-   empty states. Structural brand signature, not decoration. */
-.tech-grid {
-  background-image:
-    linear-gradient(oklch(from var(--border) l c h / 0.6) 1px, transparent 1px),
-    linear-gradient(90deg, oklch(from var(--border) l c h / 0.6) 1px, transparent 1px);
-  background-size: 20px 20px;
-}
-
-.skeleton {
-  display: inline-block;
-  width: 100%;
-  max-width: 160px;
-  height: 14px;
-  background: var(--muted);
-  animation: skeleton-pulse 1.6s ease-in-out infinite;
-}
-
-@keyframes skeleton-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.55;
-  }
-}
-
-@media (pointer: coarse) {
-  .btn,
-  .icon-btn {
-    min-width: 44px;
-    min-height: 44px;
-  }
+/* A translucent --destructive tint never clears 4.5:1 against this text
+   color at any opacity (computed: 4.78:1 untinted, already under 4.5:1 by
+   4% tint) -- a solid fill with its own foreground is the only treatment
+   that stays AA-compliant in both themes (5.36:1 light, 4.55:1 dark). The
+   generic bits-ui DropdownMenu.Item `data-highlighted:bg-accent` Tailwind
+   utility (shared by every other item) fails AA for a destructive item;
+   this class opts a specific item out of that shared treatment. */
+.dropdown-item-destructive[data-highlighted] {
+  background: var(--destructive);
+  color: var(--destructive-foreground);
 }
 
 .sr-only {
@@ -527,19 +322,6 @@ p {
   }
   50% {
     opacity: 0.58;
-  }
-}
-
-@media (max-width: 860px) {
-  .app-shell {
-    /* minmax(0, ...) for the same reason as the two-column rule above: a bare
-       1fr still floors at the content's min-content width. */
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .sidebar {
-    border-bottom: 1px solid var(--border);
-    border-right: 0;
   }
 }
 

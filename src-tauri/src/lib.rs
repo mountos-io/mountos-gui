@@ -4,7 +4,7 @@ use serde_json::Value;
 use std::{
     collections::HashSet,
     fs,
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
     sync::{Mutex, OnceLock},
@@ -81,6 +81,18 @@ struct MountProfile {
     extra_args: Vec<String>,
     created_at: String,
     updated_at: String,
+    // Detected once, from the mounted volume's own `.mountOS/.volume-type`
+    // reserved file, the first time this profile mounts successfully (or at
+    // creation time via Save-as-profile off an already-running external
+    // mount). "general" | "iceberg", lowercase. None until detected. Never
+    // reset once set: save_profile rejects any incoming value that
+    // contradicts what's already on disk (see require_stable_identity), and
+    // once set it also locks access_key_id/discovery_url/volume against
+    // further edits -- the whole point is a stable answer to "which real
+    // volume does this profile point at", not a value that could drift.
+    // Option<T> deserializes a missing key (profiles saved before this field
+    // existed) as None automatically, no #[serde(default)] needed.
+    volume_kind: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -219,6 +231,14 @@ struct DesktopSettings {
     // set, a moved/missing pinned binary is a hard error (see
     // mountos_path) rather than a silent fallback to a different install.
     cli_path_override: Option<String>,
+    // Gates the Fork management surface (fork list/create/delete/restore) in
+    // the profile editor. Off by default: fork delete/restore mutate shared
+    // server-side volume state used by every OTHER mount of the same volume,
+    // not just this profile's. #[serde(default)] so settings.json files
+    // written before this field existed still deserialize to `false` rather
+    // than failing, matching the temporary_fork precedent on MountProfile.
+    #[serde(default)]
+    advanced_ops_enabled: bool,
 }
 
 impl Default for DesktopSettings {
@@ -229,6 +249,7 @@ impl Default for DesktopSettings {
             cli_path_override: None,
             poll_seconds: None,
             terminal: None,
+            advanced_ops_enabled: false,
         }
     }
 }
@@ -258,6 +279,15 @@ const LAUNCH_TIMEOUT: Duration = Duration::from_secs(65);
 const WINDOWS_READY_TIMEOUT: Duration = Duration::from_secs(60);
 const INDETERMINATE_TIMEOUT: Duration = Duration::from_secs(120);
 const UNMOUNT_TIMEOUT: Duration = Duration::from_secs(120);
+// Fork subcommands are a real network round trip (one-shot TCP call to the
+// discovery/data server), unlike a local `list --json`/`mcp status` call --
+// every other spawn helper in this file already bounds its wait; this one
+// didn't, so an unreachable server could hang it (and forkBusy) forever.
+// Matches mountos-servers' own `context.WithTimeout(cmd.Context(), 30*time.
+// Second)` in cmd_fork.go by coincidence, not a shared constant -- keep the
+// two in sync intentionally, since a shorter value here would mask that
+// server-side context's own descriptive timeout error with a generic one.
+const FORK_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn keyring_entry(profile_id: &str) -> Result<keyring::Entry, DesktopError> {
     validate_profile_id(profile_id)?;
@@ -354,6 +384,14 @@ fn validate_profile_id(id: &str) -> Result<(), DesktopError> {
     }
 }
 
+fn find_profile(app: &AppHandle, profile_id: &str) -> Result<MountProfile, DesktopError> {
+    validate_profile_id(profile_id)?;
+    read_profiles(app)?
+        .into_iter()
+        .find(|profile| profile.id == profile_id)
+        .ok_or_else(|| DesktopError::Message("profile not found".to_string()))
+}
+
 fn read_profiles(app: &AppHandle) -> Result<Vec<MountProfile>, DesktopError> {
     let mut profiles: Vec<MountProfile> = Vec::new();
     for entry in fs::read_dir(profile_dir(app)?)? {
@@ -387,6 +425,7 @@ fn managed_flags() -> HashSet<&'static str> {
         "m",
         "mount",
         "mount-point",
+        "destination",
         "f",
         "foreground",
         "gateway",
@@ -414,9 +453,10 @@ fn managed_flags() -> HashSet<&'static str> {
 
 // gateway-* flags are deliberately excluded: validate_extra_args rejects any
 // long flag starting with "gateway-" outright (see the `name.starts_with
-// ("gateway-")` check below), regardless of what's listed here, since
-// gateway profiles aren't supported yet (save_profile hard-rejects any kind
-// other than "mount"). Revisit once gateway profile support ships.
+// ("gateway-")` check below), regardless of what's listed here. Gateway
+// launches have their own dedicated fields and argv builder
+// (build_gateway_argv/open_gateway) rather than the extraArgs escape hatch,
+// so smuggling gateway-* through extraArgs stays rejected on a mount profile.
 fn boolean_long_flags() -> HashSet<&'static str> {
     [
         "acl",
@@ -485,6 +525,27 @@ fn validate_extra_args(args: &[String]) -> Vec<String> {
     rejected
 }
 
+// Defense-in-depth, not just a save-time check: save_profile already rejects
+// a managed-flag-containing extra_args before it ever reaches disk, but a
+// hand-edited profile JSON file bypasses that entirely, so every call site
+// that actually shells extra_args out to the CLI re-validates at use time
+// too (mount_profile_blocking and the gateway combo path already did this
+// inline; factored out so the satellite view-mount launchers and the
+// gateway-only path -- which started emitting extra_args once
+// push_cache_and_extra_args was added to them -- get the same guarantee
+// instead of trusting an unrevalidated on-disk value).
+fn reject_managed_extra_args(profile: &MountProfile) -> Result<(), DesktopError> {
+    let rejected = validate_extra_args(&profile.extra_args);
+    if rejected.is_empty() {
+        Ok(())
+    } else {
+        Err(DesktopError::Message(format!(
+            "managed extra args rejected: {}",
+            rejected.join(", ")
+        )))
+    }
+}
+
 // backend_needs_mount_path reports whether `backend` uses a real,
 // user-chosen filesystem path at all. FileProvider and CloudFilter mounts
 // are entirely OS-managed (FileProvider via NSFileProviderManager, keyed by
@@ -522,12 +583,28 @@ fn build_mount_argv(profile: &MountProfile) -> Vec<String> {
     if profile.temporary_fork {
         argv.push("--temporary-fork".to_string());
     }
+    push_cache_and_extra_args(&mut argv, profile);
+    push_backend_flag(&mut argv, &profile.backend);
+    argv
+}
+
+// server_standalone.go resolves disk-cache-dir and applies extraArgs
+// unconditionally before branching on mount vs. deleted/version/snapshot vs.
+// gateway-only -- shared by build_mount_argv and every satellite/gateway
+// argv builder so a profile's configured cache dir and extra flags
+// (--debug, --agent, --xattr, etc.) don't silently revert to CLI defaults
+// for those launches.
+fn push_cache_and_extra_args(argv: &mut Vec<String>, profile: &MountProfile) {
     if let Some(cache_dir) = &profile.cache_dir {
         if !cache_dir.is_empty() {
             argv.extend(["--disk-cache-dir".to_string(), cache_dir.clone()]);
         }
     }
-    match profile.backend {
+    argv.extend(profile.extra_args.clone());
+}
+
+fn push_backend_flag(argv: &mut Vec<String>, backend: &Backend) {
+    match backend {
         Backend::Auto => {}
         Backend::Macfuse => argv.push("--macfuse".to_string()),
         Backend::Fskit => argv.push("--fskit".to_string()),
@@ -537,7 +614,256 @@ fn build_mount_argv(profile: &MountProfile) -> Vec<String> {
         Backend::Mountosio => argv.extend(["--backend".to_string(), "mountosio".to_string()]),
         Backend::Cloudfilter => argv.extend(["--backend".to_string(), "cloudfilter".to_string()]),
     }
-    argv.extend(profile.extra_args.clone());
+}
+
+// snapshot/deleted/version never exempt FileProvider/CloudFilter from a real
+// `-m`/`--destination` path the way cmd_mount.go does for regular mounts
+// (verified: runDeletedCommand/runVersionCommand have no such exemption), so
+// omitting the backend flag relies entirely on the CLI's own no-explicit-flag
+// default order being safe. That default order is genuinely safe on macOS
+// (cli_darwin.go probes macFUSE/FSKit availability with NFS loopback as an
+// always-available last resort) but NOT on Windows: cli_windows.go hard-codes
+// the no-flag default to "mountosio" with no capability probing, so a
+// CloudFilter-backend profile (chosen specifically because MountOsIo was
+// already found unusable on that machine) would have its view-mount silently
+// attempt mountosio and fail. FileProvider keeps the omission (macOS-only,
+// covered by the safe fallback chain); CloudFilter must emit its flag
+// explicitly.
+fn push_view_backend_flag(argv: &mut Vec<String>, backend: &Backend) {
+    match backend {
+        Backend::Cloudfilter => push_backend_flag(argv, backend),
+        _ if backend_needs_mount_path(backend) => push_backend_flag(argv, backend),
+        _ => {}
+    }
+}
+
+// Gives the resulting Finder/Explorer window (and the Instances-table Name
+// column, sourced from `mountos list`'s own Name field) a label that visibly
+// differs from the parent mount, so a snapshot/deleted/version row is never
+// mistaken for a second copy of the real volume.
+fn satellite_volname(profile: &MountProfile, kind: &str) -> String {
+    if profile.volume.is_empty() {
+        format!("mountOS {kind}")
+    } else {
+        format!("{} ({kind})", profile.volume)
+    }
+}
+
+// Shared discovery-url/fork-name/volname/credential prefix for the three
+// satellite view subcommands (snapshot/deleted/version). Backend/mount-path
+// flags are appended by each caller since snapshot uses -m while
+// deleted/version use --destination (see build_deleted_argv/build_version_argv).
+fn build_satellite_prefix(subcommand: &str, profile: &MountProfile, kind: &str) -> Vec<String> {
+    let mut argv = vec![subcommand.to_string()];
+    if !profile.discovery_url.is_empty() {
+        argv.extend(["--discovery-url".to_string(), profile.discovery_url.clone()]);
+    }
+    if !profile.fork.is_empty() {
+        argv.extend(["--fork-name".to_string(), profile.fork.clone()]);
+    }
+    argv.extend(["--volname".to_string(), satellite_volname(profile, kind)]);
+    argv
+}
+
+fn push_satellite_credentials(argv: &mut Vec<String>, profile: &MountProfile) {
+    if !profile.access_key_id.is_empty() {
+        argv.extend([
+            "-a".to_string(),
+            profile.access_key_id.clone(),
+            "-s".to_string(),
+        ]);
+    }
+}
+
+// snapshot has no --destination flag (verified against cmd_snapshot.go): -m
+// is its only mount-point flag, and it daemonizes normally (see
+// spawn_daemonizing_and_wait).
+fn build_snapshot_argv(profile: &MountProfile, destination: &str, timestamp: &str) -> Vec<String> {
+    let mut argv = build_satellite_prefix("snapshot", profile, "snapshot");
+    argv.extend(["-m".to_string(), destination.to_string()]);
+    // Trimmed here, not just by the caller: ParseSnapshotTime doesn't trim,
+    // so surrounding whitespace would otherwise reach argv as part of a
+    // single fused token and fail to parse server-side.
+    // Fused form: the CLI's own --timestamp examples document leading-minus
+    // relative values ("-1d"), which a separate `--timestamp -1d` token pair
+    // would risk pflag misparsing as another flag.
+    argv.push(format!("--timestamp={}", timestamp.trim()));
+    push_satellite_credentials(&mut argv, profile);
+    push_cache_and_extra_args(&mut argv, profile);
+    push_view_backend_flag(&mut argv, &profile.backend);
+    argv
+}
+
+// deleted/version take --destination (now wired server-side to behave as an
+// -m alias, see mountos-servers cmd_deleted.go/cmd_version.go) and never
+// daemonize (Foreground is hardcoded true server-side), so their readiness
+// is polled rather than awaited on child exit (see
+// spawn_foreground_view_and_poll).
+fn build_deleted_argv(
+    profile: &MountProfile,
+    destination: &str,
+    from: Option<&str>,
+    idle_timeout: Option<&str>,
+) -> Vec<String> {
+    let mut argv = build_satellite_prefix("deleted", profile, "deleted");
+    argv.extend(["--destination".to_string(), destination.to_string()]);
+    if let Some(from) = from.map(str::trim).filter(|value| !value.is_empty()) {
+        argv.push(format!("--from={from}"));
+    }
+    if let Some(idle) = idle_timeout.map(str::trim).filter(|value| !value.is_empty()) {
+        argv.push(format!("--idle-timeout={idle}"));
+    }
+    push_satellite_credentials(&mut argv, profile);
+    push_cache_and_extra_args(&mut argv, profile);
+    push_view_backend_flag(&mut argv, &profile.backend);
+    argv
+}
+
+fn build_version_argv(
+    profile: &MountProfile,
+    destination: &str,
+    inode: u64,
+    version_format: Option<&str>,
+    idle_timeout: Option<&str>,
+) -> Vec<String> {
+    let mut argv = build_satellite_prefix("version", profile, "version");
+    argv.extend(["--destination".to_string(), destination.to_string()]);
+    argv.extend(["-i".to_string(), inode.to_string()]);
+    if let Some(format) = version_format
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "number")
+    {
+        argv.push(format!("--version-format={format}"));
+    }
+    if let Some(idle) = idle_timeout.map(str::trim).filter(|value| !value.is_empty()) {
+        argv.push(format!("--idle-timeout={idle}"));
+    }
+    push_satellite_credentials(&mut argv, profile);
+    push_cache_and_extra_args(&mut argv, profile);
+    push_view_backend_flag(&mut argv, &profile.backend);
+    argv
+}
+
+// Rejects a name that would be misparsed as a flag by cobra's positional-arg
+// scanner rather than surfaced as a friendly "fork name is required" error.
+fn validate_fork_name(name: &str) -> Result<String, DesktopError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(DesktopError::Message("fork name is required".to_string()));
+    }
+    if trimmed.starts_with('-') {
+        return Err(DesktopError::Message(
+            "fork name must not start with '-'".to_string(),
+        ));
+    }
+    Ok(trimmed.to_string())
+}
+
+// No --type flag is ever emitted: it defaults to "general" server-side, and
+// iceberg-typed volumes have no profile representation in this GUI yet.
+// No volume-identifying flag is needed either (verified: forkConnect() in
+// cmd_fork.go scopes the volume from the access key alone).
+fn build_fork_list_argv(profile: &MountProfile) -> Vec<String> {
+    let mut argv = vec!["fork".to_string(), "list".to_string(), "--json".to_string()];
+    if !profile.discovery_url.is_empty() {
+        argv.extend(["--discovery-url".to_string(), profile.discovery_url.clone()]);
+    }
+    push_satellite_credentials(&mut argv, profile);
+    argv
+}
+
+fn build_fork_create_argv(
+    profile: &MountProfile,
+    name: &str,
+    parent: Option<&str>,
+    as_of: Option<&str>,
+) -> Vec<String> {
+    let mut argv = vec!["fork".to_string(), "create".to_string(), name.to_string()];
+    if !profile.discovery_url.is_empty() {
+        argv.extend(["--discovery-url".to_string(), profile.discovery_url.clone()]);
+    }
+    if let Some(parent) = parent.map(str::trim).filter(|value| !value.is_empty()) {
+        argv.push(format!("--parent={parent}"));
+    }
+    if let Some(as_of) = as_of.map(str::trim).filter(|value| !value.is_empty()) {
+        argv.push(format!("--as-of={as_of}"));
+    }
+    push_satellite_credentials(&mut argv, profile);
+    argv
+}
+
+fn build_fork_delete_argv(profile: &MountProfile, name: &str, force: bool) -> Vec<String> {
+    let mut argv = vec!["fork".to_string(), "delete".to_string(), name.to_string()];
+    if !profile.discovery_url.is_empty() {
+        argv.extend(["--discovery-url".to_string(), profile.discovery_url.clone()]);
+    }
+    if force {
+        argv.push("--force".to_string());
+    }
+    push_satellite_credentials(&mut argv, profile);
+    argv
+}
+
+fn build_fork_restore_argv(profile: &MountProfile, name: &str) -> Vec<String> {
+    let mut argv = vec!["fork".to_string(), "restore".to_string(), name.to_string()];
+    if !profile.discovery_url.is_empty() {
+        argv.extend(["--discovery-url".to_string(), profile.discovery_url.clone()]);
+    }
+    push_satellite_credentials(&mut argv, profile);
+    argv
+}
+
+// gateway-only mode uses the standalone `gateway` subcommand (no -m, no
+// backend flag, no --volname -- there is no FUSE mount at all, confirmed
+// against cmd_gateway.go/cmd_mount.go: -m is optional whenever
+// --gateway-only is set). The mount+gateway combo instead reuses the full
+// regular `mount` argv (build_mount_argv already emits -m/backend/
+// credentials/--read-only/--temporary-fork/cache-dir/extraArgs) with gateway
+// flags appended -- confirmed as the CLI's actual combo invocation shape
+// (`mount -m <dir> --gateway s3,hdfs`, no --gateway-only).
+fn build_gateway_argv(
+    profile: &MountProfile,
+    protocols: &[String],
+    port: Option<&str>,
+    gateway_only: bool,
+    no_loopback: bool,
+    cert_path: Option<&str>,
+    key_path: Option<&str>,
+) -> Vec<String> {
+    let mut argv = if gateway_only {
+        let mut argv = vec!["gateway".to_string()];
+        if !profile.discovery_url.is_empty() {
+            argv.extend(["--discovery-url".to_string(), profile.discovery_url.clone()]);
+        }
+        if !profile.fork.is_empty() {
+            argv.extend(["--fork-name".to_string(), profile.fork.clone()]);
+        }
+        push_satellite_credentials(&mut argv, profile);
+        push_cache_and_extra_args(&mut argv, profile);
+        argv
+    } else {
+        build_mount_argv(profile)
+    };
+    if !protocols.is_empty() {
+        argv.extend(["--gateway".to_string(), protocols.join(",")]);
+    }
+    if let Some(port) = port.filter(|value| !value.trim().is_empty()) {
+        argv.extend(["--gateway-port".to_string(), port.trim().to_string()]);
+    }
+    if no_loopback {
+        argv.push("--gateway-no-loopback".to_string());
+    }
+    if let (Some(cert), Some(key)) = (
+        cert_path.filter(|value| !value.trim().is_empty()),
+        key_path.filter(|value| !value.trim().is_empty()),
+    ) {
+        argv.extend([
+            "--gateway-cert".to_string(),
+            cert.trim().to_string(),
+            "--gateway-key".to_string(),
+            key.trim().to_string(),
+        ]);
+    }
     argv
 }
 
@@ -590,7 +916,18 @@ fn validate_mount_path_for_backend(
     }
     if matches!(backend, Backend::Fskit) {
         let trimmed = mount_path.trim_end_matches('/');
-        if trimmed.is_empty() || !(trimmed.starts_with(FSKIT_MOUNT_PREFIX) && trimmed.len() > FSKIT_MOUNT_PREFIX.len())
+        // The prefix check below is a plain byte comparison, not a resolved
+        // path check -- it never touches the filesystem (the mount point
+        // usually doesn't exist yet), so a ".." component must be rejected
+        // explicitly instead of relying on canonicalization to normalize it
+        // away, or "/Volumes/MountOS/x/../../../etc" would pass the prefix
+        // test despite resolving well outside the jail.
+        let has_parent_component = Path::new(trimmed)
+            .components()
+            .any(|component| component == std::path::Component::ParentDir);
+        if trimmed.is_empty()
+            || has_parent_component
+            || !(trimmed.starts_with(FSKIT_MOUNT_PREFIX) && trimmed.len() > FSKIT_MOUNT_PREFIX.len())
         {
             return Err(DesktopError::Message(format!(
                 "FSKit requires a mount point under {FSKIT_MOUNT_PREFIX}<name>, got {mount_path:?}"
@@ -780,6 +1117,80 @@ async fn mcp_install() -> Result<String, DesktopError> {
     tauri::async_runtime::spawn_blocking(mcp_install_blocking)
         .await
         .map_err(|error| DesktopError::Message(format!("mcp install task failed: {error}")))?
+}
+
+// Unlike command_output() (used by mount_help_blocking/mcp_subcommand_output/
+// --version/check --json, none of which take -a/-s), fork subcommands need a
+// piped secret, so they get their own spawn helper rather than reusing
+// command_output.
+fn run_cli_with_secret(
+    argv: &[String],
+    secret: Option<&str>,
+) -> Result<std::process::Output, DesktopError> {
+    let mut child = Command::new(mountos_path()?)
+        .args(argv)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    if let Some(secret) = secret {
+        if let Some(stdin) = child.stdin.as_mut() {
+            stdin.write_all(secret.as_bytes())?;
+            stdin.write_all(b"\n")?;
+        }
+    }
+    drop(child.stdin.take());
+    // Drained on their own threads rather than via wait_with_output(), which
+    // has no timeout variant: wait_child's kill-on-timeout closes the child's
+    // end of these pipes, so a timed-out call still lets these reads reach
+    // EOF and join() rather than hang.
+    let mut stdout_pipe = child.stdout.take();
+    let mut stderr_pipe = child.stderr.take();
+    let stdout_handle = thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(pipe) = stdout_pipe.as_mut() {
+            let _ = pipe.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let stderr_handle = thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(pipe) = stderr_pipe.as_mut() {
+            let _ = pipe.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let Some(status) = wait_child(&mut child, FORK_COMMAND_TIMEOUT)? else {
+        return Err(DesktopError::Message(format!(
+            "mountos {} timed out after {}s",
+            argv.join(" "),
+            FORK_COMMAND_TIMEOUT.as_secs()
+        )));
+    };
+    let stdout = stdout_handle.join().unwrap_or_default();
+    let stderr = stderr_handle.join().unwrap_or_default();
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+// Fork subcommands are one-shot TCP calls (connect, do the op, print, exit),
+// not mounts — no daemonize, no list --json polling, just exit-code +
+// stdout/stderr, mirroring mount_help_blocking's shape.
+fn fork_command_blocking(argv: Vec<String>, secret: Option<String>) -> Result<String, DesktopError> {
+    let output = run_cli_with_secret(&argv, secret.as_deref())?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !output.status.success() {
+        return Err(DesktopError::Message(if stderr.is_empty() {
+            format!("mountos {} exited with {}", argv.join(" "), output.status)
+        } else {
+            stderr
+        }));
+    }
+    Ok(if stdout.is_empty() { stderr } else { stdout })
 }
 
 fn mount_help_blocking() -> Result<String, DesktopError> {
@@ -1158,11 +1569,7 @@ fn export_file_stem(name: &str, fallback: &str) -> String {
 
 #[tauri::command]
 fn export_profile(app: AppHandle, profile_id: String) -> Result<ExportedProfile, DesktopError> {
-    validate_profile_id(&profile_id)?;
-    let mut profile = read_profiles(&app)?
-        .into_iter()
-        .find(|profile| profile.id == profile_id)
-        .ok_or_else(|| DesktopError::Message("profile not found".to_string()))?;
+    let mut profile = find_profile(&app, &profile_id)?;
     profile.secret_ref = "prompt".to_string();
     let path = app.path().download_dir()?.join(format!(
         "{}.mosprofile",
@@ -1172,6 +1579,89 @@ fn export_profile(app: AppHandle, profile_id: String) -> Result<ExportedProfile,
     Ok(ExportedProfile {
         path: path.display().to_string(),
     })
+}
+
+// Once a profile's volume kind is known (see detect_and_persist_volume_kind),
+// its identity -- which real volume it points at -- must not silently
+// change out from under it. access_key_id/discovery_url/volume are the
+// identity triple; fork/backend are left editable since switching forks or
+// transport doesn't repoint the profile at a different volume. A brand-new
+// profile.id (not yet on disk) has no existing record and so is never
+// locked, regardless of what volume_kind the incoming payload carries.
+fn require_stable_identity(app: &AppHandle, profile: &MountProfile) -> Result<(), DesktopError> {
+    let Ok(existing) = find_profile(app, &profile.id) else {
+        return Ok(());
+    };
+    let Some(kind) = &existing.volume_kind else {
+        return Ok(());
+    };
+    if existing.access_key_id != profile.access_key_id
+        || existing.discovery_url != profile.discovery_url
+        || existing.volume != profile.volume
+    {
+        return Err(DesktopError::Message(
+            "this profile's identity is locked: access key ID, discovery URL, and volume \
+             name cannot change once the volume kind is known (after first mount). Delete \
+             and recreate the profile to point at a different volume."
+                .to_string(),
+        ));
+    }
+    if profile.volume_kind.as_deref() != Some(kind.as_str()) {
+        return Err(DesktopError::Message(
+            "volume kind cannot be changed once detected".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+// Reads the mounted volume's own `.mountOS/.volume-type` reserved file
+// (plain text "General"/"Iceberg\n") the first time a profile mounts
+// successfully, and persists it to the profile so its identity locks (see
+// require_stable_identity). Best-effort and silent on any failure -- a
+// volume-kind badge is not worth failing an otherwise-successful mount over,
+// and the next successful mount tries again since volume_kind stays None.
+//
+// Known gap: FileProvider and CloudFilter profiles have no real filesystem
+// mount_path (backend_needs_mount_path is false for both, entirely OS-managed
+// instead), so this read can never succeed for them -- volume_kind, its
+// badge, and the identity lock never engage for those two backends. Not
+// worth a separate detection path (would need a control-socket round trip
+// instead of a direct file read) for what stays a UX/data-integrity nicety,
+// not a security boundary either way.
+fn detect_and_persist_volume_kind(app: &AppHandle, profile: &MountProfile) {
+    if profile.volume_kind.is_some() {
+        return;
+    }
+    let Ok(bytes) = fs::read(
+        PathBuf::from(&profile.mount_path)
+            .join(".mountOS")
+            .join(".volume-type"),
+    ) else {
+        return;
+    };
+    let kind = String::from_utf8_lossy(&bytes).trim().to_ascii_lowercase();
+    if kind.is_empty() {
+        return;
+    }
+    let Ok(path) = profile_path(app, &profile.id) else {
+        return;
+    };
+    // Re-read the on-disk profile immediately before writing, rather than
+    // reusing the in-memory `profile` argument: by this point it may carry
+    // an in-memory-only mutation (e.g. resolve_auto_backend resolving
+    // "auto" to a concrete backend just for this mount attempt) that must
+    // never be persisted, and a concurrent save_profile may have landed
+    // while the mount was in flight.
+    let Ok(bytes) = fs::read(&path) else {
+        return;
+    };
+    let Ok(mut updated) = serde_json::from_slice::<MountProfile>(&bytes) else {
+        return;
+    };
+    updated.volume_kind = Some(kind);
+    if let Ok(bytes) = serde_json::to_vec_pretty(&updated) {
+        let _ = fs::write(path, bytes);
+    }
 }
 
 #[tauri::command]
@@ -1200,14 +1690,9 @@ fn save_profile(app: AppHandle, profile: MountProfile) -> Result<MountProfile, D
             "access key ID must be {ACCESS_KEY_ID_LENGTH} characters"
         )));
     }
+    require_stable_identity(&app, &profile)?;
     validate_mount_path_for_backend(&profile.backend, &profile.mount_path)?;
-    let rejected = validate_extra_args(&profile.extra_args);
-    if !rejected.is_empty() {
-        return Err(DesktopError::Message(format!(
-            "managed extra args rejected: {}",
-            rejected.join(", ")
-        )));
-    }
+    reject_managed_extra_args(&profile)?;
     let path = profile_path(&app, &profile.id)?;
     fs::write(path, serde_json::to_vec_pretty(&profile)?)?;
     Ok(profile)
@@ -1338,21 +1823,11 @@ fn mount_profile_blocking(
     profile_id: String,
     secret: Option<String>,
 ) -> Result<MountResult, DesktopError> {
-    validate_profile_id(&profile_id)?;
-    let mut profile = read_profiles(&app)?
-        .into_iter()
-        .find(|profile| profile.id == profile_id)
-        .ok_or_else(|| DesktopError::Message("profile not found".to_string()))?;
+    let mut profile = find_profile(&app, &profile_id)?;
     validate_backend_for_platform(&profile.backend)?;
     resolve_auto_backend(&mut profile)?;
     validate_mount_path_for_backend(&profile.backend, &profile.mount_path)?;
-    let rejected = validate_extra_args(&profile.extra_args);
-    if !rejected.is_empty() {
-        return Err(DesktopError::Message(format!(
-            "managed extra args rejected: {}",
-            rejected.join(", ")
-        )));
-    }
+    reject_managed_extra_args(&profile)?;
     let needs_mount_path = backend_needs_mount_path(&profile.backend);
     if needs_mount_path && profile.mount_path.is_empty() {
         return Err(DesktopError::Message("mount path is required".to_string()));
@@ -1374,16 +1849,42 @@ fn mount_profile_blocking(
     let args = build_mount_argv(&profile);
     let stderr_path = runtime_dir(&app)?.join(format!("mount-{}-stderr.log", profile.id));
     let stdout_path = runtime_dir(&app)?.join(format!("mount-{}-stdout.log", profile.id));
-    let stderr_file = fs::File::create(&stderr_path)?;
-    let stdout_file = fs::File::create(&stdout_path)?;
-    let mut child = Command::new(mountos_path()?)
+    let target = profile.mount_path.clone();
+    let result = spawn_daemonizing_and_wait(
+        &mountos_path()?,
+        &args,
+        mount_secret.as_deref(),
+        &stdout_path,
+        &stderr_path,
+        &target,
+    )?;
+    detect_and_persist_volume_kind(&app, &profile);
+    Ok(result)
+}
+
+// Shared by mount_profile_blocking and open_snapshot_view_blocking: both
+// subcommands daemonize normally (parent forks, blocks on the readiness
+// pipe up to LAUNCH_TIMEOUT, exits 0 with "started with PID" on success) —
+// confirmed for `snapshot` by reading cmd_snapshot.go (Config.Foreground is
+// never set there, unlike deleted/version).
+fn spawn_daemonizing_and_wait(
+    mountos: &Path,
+    args: &[String],
+    secret: Option<&str>,
+    stdout_path: &Path,
+    stderr_path: &Path,
+    ready_target: &str,
+) -> Result<MountResult, DesktopError> {
+    let stderr_file = fs::File::create(stderr_path)?;
+    let stdout_file = fs::File::create(stdout_path)?;
+    let mut child = Command::new(mountos)
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::from(stdout_file))
         .stderr(Stdio::from(stderr_file))
         .spawn()?;
 
-    if let Some(secret) = mount_secret {
+    if let Some(secret) = secret {
         if let Some(stdin) = child.stdin.as_mut() {
             stdin.write_all(secret.as_bytes())?;
             stdin.write_all(b"\n")?;
@@ -1393,17 +1894,17 @@ fn mount_profile_blocking(
 
     let Some(status) = wait_child(&mut child, LAUNCH_TIMEOUT)? else {
         return Err(DesktopError::Message(
-            "mount launch timed out and the child process was terminated".to_string(),
+            "launch timed out and the child process was terminated".to_string(),
         ));
     };
     if status.success() {
         #[cfg(windows)]
-        if !poll_target(&profile.mount_path, true, WINDOWS_READY_TIMEOUT) {
-            let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
-            let stdout = fs::read_to_string(&stdout_path).unwrap_or_default();
+        if !poll_target(ready_target, true, WINDOWS_READY_TIMEOUT) {
+            let stderr = fs::read_to_string(stderr_path).unwrap_or_default();
+            let stdout = fs::read_to_string(stdout_path).unwrap_or_default();
             let detail = format!("{stderr}\n{stdout}").trim().to_string();
             return Err(DesktopError::Message(if detail.is_empty() {
-                "mount process exited, but the target did not become ready within 60 seconds"
+                "process exited, but the target did not become ready within 60 seconds"
                     .to_string()
             } else {
                 detail
@@ -1411,23 +1912,23 @@ fn mount_profile_blocking(
         }
         return Ok(MountResult {
             state: "ready".to_string(),
-            target: profile.mount_path,
+            target: ready_target.to_string(),
         });
     }
-    let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
-    let stdout = fs::read_to_string(&stdout_path).unwrap_or_default();
+    let stderr = fs::read_to_string(stderr_path).unwrap_or_default();
+    let stdout = fs::read_to_string(stdout_path).unwrap_or_default();
     let detail = format!("{stderr}\n{stdout}").trim().to_string();
     let indeterminate =
         detail.contains("did not become ready within") || detail.contains("no readiness signal");
-    if indeterminate && poll_target(&profile.mount_path, true, INDETERMINATE_TIMEOUT) {
+    if indeterminate && poll_target(ready_target, true, INDETERMINATE_TIMEOUT) {
         return Ok(MountResult {
             state: "ready".to_string(),
-            target: profile.mount_path,
+            target: ready_target.to_string(),
         });
     }
     if detail.is_empty() {
         Err(DesktopError::Message(format!(
-            "mountos mount exited with {status}"
+            "mountos exited with {status}"
         )))
     } else if indeterminate {
         Err(DesktopError::Message(format!(
@@ -1436,6 +1937,149 @@ fn mount_profile_blocking(
     } else {
         Err(DesktopError::Message(detail))
     }
+}
+
+// deleted/version never daemonize (Foreground: true is hardcoded
+// server-side, confirmed in cmd_deleted.go/cmd_version.go, and
+// server_standalone.go skips the daemonize re-exec whenever config.Foreground
+// is true): the spawned child runs the FUSE server in-process for the
+// mount's lifetime and never exits on its own. This polls `list --json` for
+// readiness while concurrently checking try_wait() so a fast failure (bad
+// credentials, discovery error) is caught promptly rather than waiting out
+// the full timeout. On success the Child handle is dropped without being
+// waited on — std::process::Child has no kill-on-drop behavior, so this
+// correctly releases Rust's ownership while leaving the OS process running
+// as the mount's own server, same as any other backend's detached child.
+fn spawn_foreground_view_and_poll(
+    mountos: &Path,
+    args: &[String],
+    secret: Option<&str>,
+    stdout_path: &Path,
+    stderr_path: &Path,
+    ready_target: &str,
+    timeout: Duration,
+) -> Result<MountResult, DesktopError> {
+    let stderr_file = fs::File::create(stderr_path)?;
+    let stdout_file = fs::File::create(stdout_path)?;
+    let mut child = Command::new(mountos)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::from(stdout_file))
+        .stderr(Stdio::from(stderr_file))
+        .spawn()?;
+
+    if let Some(secret) = secret {
+        if let Some(stdin) = child.stdin.as_mut() {
+            stdin.write_all(secret.as_bytes())?;
+            stdin.write_all(b"\n")?;
+        }
+    }
+    drop(child.stdin.take());
+
+    let started = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            let stderr = fs::read_to_string(stderr_path).unwrap_or_default();
+            let stdout = fs::read_to_string(stdout_path).unwrap_or_default();
+            let detail = format!("{stderr}\n{stdout}").trim().to_string();
+            return Err(DesktopError::Message(if detail.is_empty() {
+                format!("mountos exited with {status} before the view became ready")
+            } else {
+                detail
+            }));
+        }
+        if list_contains_target(ready_target).unwrap_or(false) {
+            // This Child IS the long-running FUSE server (Foreground is
+            // hardcoded server-side for deleted/version, no daemonize/
+            // re-parent ever happens) -- unlike spawn_daemonizing_and_wait's
+            // tracked Child, which is always reaped by wait_child, dropping
+            // this one leaks a zombie for the rest of the app's lifetime
+            // (Child has no reap-on-drop). Reap it on a detached thread once
+            // it eventually exits (unmount, crash, idle-timeout) without
+            // blocking this call on that.
+            thread::spawn(move || {
+                let _ = child.wait();
+            });
+            return Ok(MountResult {
+                state: "ready".to_string(),
+                target: ready_target.to_string(),
+            });
+        }
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(DesktopError::Message(
+                "view mount timed out before becoming ready and was terminated".to_string(),
+            ));
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+}
+
+// gateway-only has no `list --json` entry to poll for readiness at all
+// (confirmed: gateway-only lifecycle has no control socket and no mount
+// entry), unlike the mount+gateway combo (which reuses
+// spawn_daemonizing_and_wait exactly, its ready_target being the real mount
+// path). This mirrors spawn_daemonizing_and_wait's primary, non-polling path
+// only: child exits 0 => ready, anything else is surfaced as-is. Gateway
+// mode is NOT hardcoded Foreground server-side (verified: no such reference
+// in cmd_gateway.go/cmd_mount.go), so it daemonizes normally like a regular
+// mount -- this is not a new spawn contract, just the existing one without a
+// target to double-check readiness against.
+fn spawn_gateway_only_and_wait(
+    mountos: &Path,
+    args: &[String],
+    secret: Option<&str>,
+    stdout_path: &Path,
+    stderr_path: &Path,
+) -> Result<MountResult, DesktopError> {
+    let stderr_file = fs::File::create(stderr_path)?;
+    let stdout_file = fs::File::create(stdout_path)?;
+    let mut child = Command::new(mountos)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::from(stdout_file))
+        .stderr(Stdio::from(stderr_file))
+        .spawn()?;
+
+    if let Some(secret) = secret {
+        if let Some(stdin) = child.stdin.as_mut() {
+            stdin.write_all(secret.as_bytes())?;
+            stdin.write_all(b"\n")?;
+        }
+    }
+    drop(child.stdin.take());
+
+    let Some(status) = wait_child(&mut child, LAUNCH_TIMEOUT)? else {
+        return Err(DesktopError::Message(
+            "gateway launch timed out and the child process was terminated".to_string(),
+        ));
+    };
+    if status.success() {
+        return Ok(MountResult {
+            state: "ready".to_string(),
+            target: "gateway".to_string(),
+        });
+    }
+    let stderr = fs::read_to_string(stderr_path).unwrap_or_default();
+    let stdout = fs::read_to_string(stdout_path).unwrap_or_default();
+    let detail = format!("{stderr}\n{stdout}").trim().to_string();
+    Err(DesktopError::Message(if detail.is_empty() {
+        format!("mountos gateway exited with {status}")
+    } else {
+        detail
+    }))
+}
+
+// Cheap non-crypto hash for log-file names: a single profile can legitimately
+// drive multiple concurrent Deleted/Version/Snapshot views at different
+// destinations, so profile-id-only filenames (as mount-*.log uses, fine
+// there since a profile has exactly one mount_path) would collide.
+fn short_hash(input: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    input.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 #[tauri::command]
@@ -1447,6 +2091,702 @@ async fn mount_profile(
     tauri::async_runtime::spawn_blocking(move || mount_profile_blocking(app, profile_id, secret))
         .await
         .map_err(|error| DesktopError::Message(format!("mount task failed: {error}")))?
+}
+
+// Shared by the fork commands and the three satellite view-mount commands:
+// resolves a profile's secret from vault or an explicitly-provided value,
+// exactly like mount_profile_blocking's inline version.
+fn resolve_satellite_secret(
+    profile: &MountProfile,
+    secret: Option<String>,
+) -> Result<Option<String>, DesktopError> {
+    if profile.access_key_id.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(read_profile_secret(profile, secret)?.ok_or_else(|| {
+            DesktopError::Message("secret required".to_string())
+        })?))
+    }
+}
+
+// Server-side re-check, not just a hidden button, so a fork command reached
+// by any other in-app code path still honors the same gate as the button.
+// This is NOT a boundary against a hostile renderer: `advanced_ops_enabled`
+// lives in settings.json, and save_settings writes it back verbatim, so any
+// invoke() caller can flip it on with one extra call before calling a fork
+// command. Closing that would require treating the webview as adversarial,
+// which no other command in this app does either (mount/unmount/save_profile
+// are all equally reachable) -- accepted, same trust model as the rest of
+// this file's Tauri commands.
+fn require_advanced_ops(app: &AppHandle) -> Result<(), DesktopError> {
+    if get_settings(app.clone())?.advanced_ops_enabled {
+        Ok(())
+    } else {
+        Err(DesktopError::Message(
+            "Fork management is disabled. Enable it in Settings first.".to_string(),
+        ))
+    }
+}
+
+fn fork_list_blocking(
+    app: AppHandle,
+    profile_id: String,
+    secret: Option<String>,
+) -> Result<String, DesktopError> {
+    require_advanced_ops(&app)?;
+    let profile = find_profile(&app, &profile_id)?;
+    let resolved_secret = resolve_satellite_secret(&profile, secret)?;
+    fork_command_blocking(build_fork_list_argv(&profile), resolved_secret)
+}
+
+#[tauri::command]
+async fn fork_list_raw(
+    app: AppHandle,
+    profile_id: String,
+    secret: Option<String>,
+) -> Result<String, DesktopError> {
+    tauri::async_runtime::spawn_blocking(move || fork_list_blocking(app, profile_id, secret))
+        .await
+        .map_err(|error| DesktopError::Message(format!("fork list task failed: {error}")))?
+}
+
+fn fork_create_blocking(
+    app: AppHandle,
+    profile_id: String,
+    name: String,
+    parent: Option<String>,
+    as_of: Option<String>,
+    secret: Option<String>,
+) -> Result<String, DesktopError> {
+    require_advanced_ops(&app)?;
+    let profile = find_profile(&app, &profile_id)?;
+    let name = validate_fork_name(&name)?;
+    let resolved_secret = resolve_satellite_secret(&profile, secret)?;
+    fork_command_blocking(
+        build_fork_create_argv(&profile, &name, parent.as_deref(), as_of.as_deref()),
+        resolved_secret,
+    )
+}
+
+#[tauri::command]
+async fn fork_create(
+    app: AppHandle,
+    profile_id: String,
+    name: String,
+    parent: Option<String>,
+    as_of: Option<String>,
+    secret: Option<String>,
+) -> Result<String, DesktopError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        fork_create_blocking(app, profile_id, name, parent, as_of, secret)
+    })
+    .await
+    .map_err(|error| DesktopError::Message(format!("fork create task failed: {error}")))?
+}
+
+fn fork_delete_blocking(
+    app: AppHandle,
+    profile_id: String,
+    name: String,
+    force: bool,
+    secret: Option<String>,
+) -> Result<String, DesktopError> {
+    require_advanced_ops(&app)?;
+    let profile = find_profile(&app, &profile_id)?;
+    let name = validate_fork_name(&name)?;
+    let resolved_secret = resolve_satellite_secret(&profile, secret)?;
+    fork_command_blocking(build_fork_delete_argv(&profile, &name, force), resolved_secret)
+}
+
+#[tauri::command]
+async fn fork_delete(
+    app: AppHandle,
+    profile_id: String,
+    name: String,
+    force: bool,
+    secret: Option<String>,
+) -> Result<String, DesktopError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        fork_delete_blocking(app, profile_id, name, force, secret)
+    })
+    .await
+    .map_err(|error| DesktopError::Message(format!("fork delete task failed: {error}")))?
+}
+
+fn fork_restore_blocking(
+    app: AppHandle,
+    profile_id: String,
+    name: String,
+    secret: Option<String>,
+) -> Result<String, DesktopError> {
+    require_advanced_ops(&app)?;
+    let profile = find_profile(&app, &profile_id)?;
+    let name = validate_fork_name(&name)?;
+    let resolved_secret = resolve_satellite_secret(&profile, secret)?;
+    fork_command_blocking(build_fork_restore_argv(&profile, &name), resolved_secret)
+}
+
+#[tauri::command]
+async fn fork_restore(
+    app: AppHandle,
+    profile_id: String,
+    name: String,
+    secret: Option<String>,
+) -> Result<String, DesktopError> {
+    tauri::async_runtime::spawn_blocking(move || fork_restore_blocking(app, profile_id, name, secret))
+        .await
+        .map_err(|error| DesktopError::Message(format!("fork restore task failed: {error}")))?
+}
+
+// Shared guard for the three satellite view-mount commands: the destination
+// must be a real absolute path (never OS-managed like FileProvider/
+// CloudFilter targets, since deleted/version/snapshot have no such exemption
+// server-side — verified against cmd_deleted.go/cmd_version.go/
+// cmd_snapshot.go) and must differ from the parent profile's own mount path.
+fn validate_view_destination(profile: &MountProfile, destination: &str) -> Result<(), DesktopError> {
+    if destination.trim().is_empty() || !is_openable_target(destination) {
+        return Err(DesktopError::Message(
+            "destination must be an absolute filesystem path".to_string(),
+        ));
+    }
+    // Reuses the same FSKit /Volumes/MountOS/<name> prefix check the primary
+    // mount path already enforces: push_view_backend_flag emits --fskit for
+    // these view-mounts too, so an FSKit destination is bound by the same
+    // real constraint, not just a plain absolute path.
+    validate_mount_path_for_backend(&profile.backend, destination)?;
+    if !profile.mount_path.is_empty() && targets_equal(destination, &profile.mount_path) {
+        return Err(DesktopError::Message(
+            "destination must differ from the profile's own mount path".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn open_snapshot_view_blocking(
+    app: AppHandle,
+    profile_id: String,
+    destination: String,
+    timestamp: String,
+    secret: Option<String>,
+) -> Result<MountResult, DesktopError> {
+    let mut profile = find_profile(&app, &profile_id)?;
+    validate_view_destination(&profile, &destination)?;
+    if timestamp.trim().is_empty() {
+        return Err(DesktopError::Message("timestamp is required".to_string()));
+    }
+    validate_backend_for_platform(&profile.backend)?;
+    resolve_auto_backend(&mut profile)?;
+    if list_contains_target(&destination)? {
+        return Err(DesktopError::Message(format!(
+            "target is already mounted: {destination}"
+        )));
+    }
+    reject_managed_extra_args(&profile)?;
+    let resolved_secret = resolve_satellite_secret(&profile, secret)?;
+    let args = build_snapshot_argv(&profile, &destination, timestamp.trim());
+    let suffix = short_hash(&destination);
+    let stderr_path = runtime_dir(&app)?.join(format!("snapshot-{}-{suffix}-stderr.log", profile.id));
+    let stdout_path = runtime_dir(&app)?.join(format!("snapshot-{}-{suffix}-stdout.log", profile.id));
+    spawn_daemonizing_and_wait(
+        &mountos_path()?,
+        &args,
+        resolved_secret.as_deref(),
+        &stdout_path,
+        &stderr_path,
+        &destination,
+    )
+}
+
+#[tauri::command]
+async fn open_snapshot_view(
+    app: AppHandle,
+    profile_id: String,
+    destination: String,
+    timestamp: String,
+    secret: Option<String>,
+) -> Result<MountResult, DesktopError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        open_snapshot_view_blocking(app, profile_id, destination, timestamp, secret)
+    })
+    .await
+    .map_err(|error| DesktopError::Message(format!("snapshot view task failed: {error}")))?
+}
+
+fn open_deleted_view_blocking(
+    app: AppHandle,
+    profile_id: String,
+    destination: String,
+    from: Option<String>,
+    idle_timeout: Option<String>,
+    secret: Option<String>,
+) -> Result<MountResult, DesktopError> {
+    let mut profile = find_profile(&app, &profile_id)?;
+    validate_view_destination(&profile, &destination)?;
+    validate_backend_for_platform(&profile.backend)?;
+    resolve_auto_backend(&mut profile)?;
+    if list_contains_target(&destination)? {
+        return Err(DesktopError::Message(format!(
+            "target is already mounted: {destination}"
+        )));
+    }
+    reject_managed_extra_args(&profile)?;
+    let resolved_secret = resolve_satellite_secret(&profile, secret)?;
+    let args = build_deleted_argv(&profile, &destination, from.as_deref(), idle_timeout.as_deref());
+    let suffix = short_hash(&destination);
+    let stderr_path = runtime_dir(&app)?.join(format!("deleted-{}-{suffix}-stderr.log", profile.id));
+    let stdout_path = runtime_dir(&app)?.join(format!("deleted-{}-{suffix}-stdout.log", profile.id));
+    spawn_foreground_view_and_poll(
+        &mountos_path()?,
+        &args,
+        resolved_secret.as_deref(),
+        &stdout_path,
+        &stderr_path,
+        &destination,
+        LAUNCH_TIMEOUT,
+    )
+}
+
+#[tauri::command]
+async fn open_deleted_view(
+    app: AppHandle,
+    profile_id: String,
+    destination: String,
+    from: Option<String>,
+    idle_timeout: Option<String>,
+    secret: Option<String>,
+) -> Result<MountResult, DesktopError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        open_deleted_view_blocking(app, profile_id, destination, from, idle_timeout, secret)
+    })
+    .await
+    .map_err(|error| DesktopError::Message(format!("deleted view task failed: {error}")))?
+}
+
+fn open_version_view_blocking(
+    app: AppHandle,
+    profile_id: String,
+    destination: String,
+    inode: String,
+    version_format: Option<String>,
+    idle_timeout: Option<String>,
+    secret: Option<String>,
+) -> Result<MountResult, DesktopError> {
+    let mut profile = find_profile(&app, &profile_id)?;
+    validate_view_destination(&profile, &destination)?;
+    // Inodes travel as strings end-to-end (see MountInstance.version_inode):
+    // a JS `number` silently loses precision above Number.MAX_SAFE_INTEGER.
+    let parsed_inode: u64 = inode
+        .trim()
+        .parse()
+        .map_err(|_| DesktopError::Message(format!("invalid inode number: {inode:?}")))?;
+    validate_backend_for_platform(&profile.backend)?;
+    resolve_auto_backend(&mut profile)?;
+    if list_contains_target(&destination)? {
+        return Err(DesktopError::Message(format!(
+            "target is already mounted: {destination}"
+        )));
+    }
+    reject_managed_extra_args(&profile)?;
+    let resolved_secret = resolve_satellite_secret(&profile, secret)?;
+    let args = build_version_argv(
+        &profile,
+        &destination,
+        parsed_inode,
+        version_format.as_deref(),
+        idle_timeout.as_deref(),
+    );
+    let suffix = short_hash(&destination);
+    let stderr_path = runtime_dir(&app)?.join(format!("version-{}-{suffix}-stderr.log", profile.id));
+    let stdout_path = runtime_dir(&app)?.join(format!("version-{}-{suffix}-stdout.log", profile.id));
+    spawn_foreground_view_and_poll(
+        &mountos_path()?,
+        &args,
+        resolved_secret.as_deref(),
+        &stdout_path,
+        &stderr_path,
+        &destination,
+        LAUNCH_TIMEOUT,
+    )
+}
+
+#[tauri::command]
+async fn open_version_view(
+    app: AppHandle,
+    profile_id: String,
+    destination: String,
+    inode: String,
+    version_format: Option<String>,
+    idle_timeout: Option<String>,
+    secret: Option<String>,
+) -> Result<MountResult, DesktopError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        open_version_view_blocking(
+            app,
+            profile_id,
+            destination,
+            inode,
+            version_format,
+            idle_timeout,
+            secret,
+        )
+    })
+    .await
+    .map_err(|error| DesktopError::Message(format!("version view task failed: {error}")))?
+}
+
+// Mirrors mountos-servers' gatewayDescriptor JSON exactly (snake_case keys
+// as written by Go's `json:"..."` tags, hence no #[serde(rename_all)] here
+// -- Rust's own field names already are snake_case). Deliberately reading
+// this file from the GUI, overriding the original "not public GUI contract"
+// caution: the only alternative is no live PID/endpoint readback at all, and
+// the descriptor already excludes the secret by design (comment in
+// gateway_descriptor.go), so the read is not a credential-exposure risk.
+#[derive(Debug, Deserialize)]
+struct GatewayDescriptorFile {
+    #[serde(default)]
+    endpoints: std::collections::HashMap<String, GatewayEndpointFile>,
+    // Looked up by exact pid (the filename itself), so volume/fork identity
+    // in the payload doesn't need cross-checking here -- kept only for the
+    // `pid` assertion in tests and to document the schema shape.
+    pid: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct GatewayEndpointFile {
+    url: String,
+    #[serde(default)]
+    region: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct GatewayEndpointInfo {
+    protocol: String,
+    url: String,
+    region: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GatewayLaunchResult {
+    state: String,
+    // None when the descriptor couldn't be found (best-effort discovery) --
+    // the launch may still have succeeded; a missing PID just means the
+    // Stop-gateway action won't be offered for it.
+    pid: Option<u32>,
+    endpoints: Vec<GatewayEndpointInfo>,
+}
+
+// Reads this launch's own `mountOS-<pid>.gateway.json` directly (written by
+// writeGatewayDescriptor; the home-dir copy needs an internal volShardID this
+// GUI has no way to compute, so only the tmp copy is used). Keyed by the
+// EXACT pid this process parsed from its own spawned child's stdout (see
+// parse_started_pid) -- deliberately not a volume-name+recency scan: this
+// machine can easily have multiple gateways from unrelated launches running
+// concurrently (including for the same volume), and a fuzzy match risked
+// attributing a different launch's PID/endpoints to this one, which then
+// fed straight into Stop-gateway. Best-effort: returns None on any I/O/parse
+// failure, never an error -- a missing descriptor shouldn't fail an
+// otherwise-successful launch.
+fn find_gateway_descriptor(pid: u32) -> Option<GatewayDescriptorFile> {
+    let path = std::env::temp_dir().join(format!("mountOS-{pid}.gateway.json"));
+    let bytes = fs::read(path).ok()?;
+    let descriptor = serde_json::from_slice::<GatewayDescriptorFile>(&bytes).ok()?;
+    // Cheap integrity check: the file's own claimed pid must match the exact
+    // pid its filename was looked up under. A mismatch means either a
+    // corrupted write or a forged file (the temp dir is per-user but still
+    // shared with every other process this user runs) -- either way, not a
+    // descriptor this launch should trust.
+    (descriptor.pid == i64::from(pid)).then_some(descriptor)
+}
+
+// The daemonizing spawn's own readiness signal (Unix's pipe, Windows'
+// poll_target on the eventual mount) only orders around the FUSE mount, not
+// the gateway descriptor write -- for a gateway-only launch there is no mount
+// to wait on at all, and on Windows daemon_windows.go's Daemonize returns as
+// soon as CreateProcess succeeds, well before the child has bound its
+// listeners and written its descriptor. Poll briefly rather than accepting
+// whatever's there (or isn't) on the very first read.
+const GATEWAY_DESCRIPTOR_POLL_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn find_gateway_descriptor_with_retry(pid: u32) -> Option<GatewayDescriptorFile> {
+    let started = Instant::now();
+    loop {
+        if let Some(descriptor) = find_gateway_descriptor(pid) {
+            return Some(descriptor);
+        }
+        if started.elapsed() >= GATEWAY_DESCRIPTOR_POLL_TIMEOUT {
+            return None;
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+}
+
+// Matches the pinned "<title> started with PID: <pid>" contract both
+// daemon.go and daemon_windows.go print on their parent's stdout right
+// before exiting 0 -- the same string the original desktop-gui design doc
+// already treats as a stable, documented pinned string for other purposes.
+fn parse_started_pid(text: &str) -> Option<u32> {
+    let idx = text.find("started with PID: ")?;
+    let rest = &text[idx + "started with PID: ".len()..];
+    rest.split(|c: char| !c.is_ascii_digit())
+        .next()
+        .filter(|digits| !digits.is_empty())
+        .and_then(|digits| digits.parse().ok())
+}
+
+// PIDs this process has itself discovered via a successful gateway launch's
+// own stdout (see parse_started_pid) -- the only PIDs stop_gateway is willing
+// to act on. Without this, stop_gateway would trust whatever u32 an
+// invoke('stop_gateway', {pid}) caller supplied, name-checked only by
+// pid_is_mountos_process, which can't distinguish "the gateway this app
+// launched" from "any other mountOS-family process the same user has
+// running" (this machine alone can have dozens, see mos-load-*).
+static KNOWN_GATEWAY_PIDS: OnceLock<Mutex<HashSet<u32>>> = OnceLock::new();
+
+fn known_gateway_pids() -> &'static Mutex<HashSet<u32>> {
+    KNOWN_GATEWAY_PIDS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GatewayLaunchParams {
+    protocols: Vec<String>,
+    port: Option<String>,
+    gateway_only: bool,
+    no_loopback: bool,
+    cert_path: Option<String>,
+    key_path: Option<String>,
+}
+
+fn open_gateway_blocking(
+    app: AppHandle,
+    profile_id: String,
+    params: GatewayLaunchParams,
+    secret: Option<String>,
+) -> Result<GatewayLaunchResult, DesktopError> {
+    let GatewayLaunchParams {
+        protocols,
+        port,
+        gateway_only,
+        no_loopback,
+        cert_path,
+        key_path,
+    } = params;
+    reconcile_known_gateway_pids();
+    let mut profile = find_profile(&app, &profile_id)?;
+    if protocols.is_empty() {
+        return Err(DesktopError::Message(
+            "select at least one gateway protocol (S3 and/or HDFS)".to_string(),
+        ));
+    }
+    if no_loopback
+        && (cert_path.as_deref().unwrap_or("").trim().is_empty()
+            || key_path.as_deref().unwrap_or("").trim().is_empty())
+    {
+        return Err(DesktopError::Message(
+            "binding on all interfaces (--gateway-no-loopback) requires a TLS certificate and key"
+                .to_string(),
+        ));
+    }
+    if !gateway_only {
+        validate_backend_for_platform(&profile.backend)?;
+        resolve_auto_backend(&mut profile)?;
+        validate_mount_path_for_backend(&profile.backend, &profile.mount_path)?;
+        if profile.mount_path.is_empty() {
+            return Err(DesktopError::Message(
+                "mount path is required for a mount+gateway combo; enable gateway-only if this \
+                 profile doesn't need a FUSE mount"
+                    .to_string(),
+            ));
+        }
+        if list_contains_target(&profile.mount_path)? {
+            return Err(DesktopError::Message(format!(
+                "target is already mounted: {}",
+                profile.mount_path
+            )));
+        }
+    }
+    // Applies to both branches: gateway-only also emits extra_args now (see
+    // push_cache_and_extra_args), not just the mount+gateway combo.
+    reject_managed_extra_args(&profile)?;
+    let resolved_secret = resolve_satellite_secret(&profile, secret)?;
+    let args = build_gateway_argv(
+        &profile,
+        &protocols,
+        port.as_deref(),
+        gateway_only,
+        no_loopback,
+        cert_path.as_deref(),
+        key_path.as_deref(),
+    );
+    let suffix = short_hash(&format!("{gateway_only}-{}", protocols.join(",")));
+    let stderr_path = runtime_dir(&app)?.join(format!("gateway-{}-{suffix}-stderr.log", profile.id));
+    let stdout_path = runtime_dir(&app)?.join(format!("gateway-{}-{suffix}-stdout.log", profile.id));
+    let result = if gateway_only {
+        spawn_gateway_only_and_wait(
+            &mountos_path()?,
+            &args,
+            resolved_secret.as_deref(),
+            &stdout_path,
+            &stderr_path,
+        )?
+    } else {
+        spawn_daemonizing_and_wait(
+            &mountos_path()?,
+            &args,
+            resolved_secret.as_deref(),
+            &stdout_path,
+            &stderr_path,
+            &profile.mount_path,
+        )?
+    };
+    // The parent's own stdout is the authoritative source for the pid --
+    // parsed from this process's own spawned child, never from anything the
+    // frontend could supply. Only a pid discovered this way ever becomes
+    // stoppable (see known_gateway_pids/stop_gateway_blocking).
+    let stdout_text = fs::read_to_string(&stdout_path).unwrap_or_default();
+    let pid = parse_started_pid(&stdout_text);
+    if let Some(pid) = pid {
+        known_gateway_pids()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(pid);
+    }
+    let descriptor = pid.and_then(find_gateway_descriptor_with_retry);
+    let endpoints = descriptor
+        .map(|d| {
+            d.endpoints
+                .into_iter()
+                .map(|(protocol, endpoint)| GatewayEndpointInfo {
+                    protocol,
+                    url: endpoint.url,
+                    region: (!endpoint.region.is_empty()).then_some(endpoint.region),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(GatewayLaunchResult {
+        state: result.state,
+        pid,
+        endpoints,
+    })
+}
+
+#[tauri::command]
+async fn open_gateway(
+    app: AppHandle,
+    profile_id: String,
+    params: GatewayLaunchParams,
+    secret: Option<String>,
+) -> Result<GatewayLaunchResult, DesktopError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        open_gateway_blocking(app, profile_id, params, secret)
+    })
+    .await
+    .map_err(|error| DesktopError::Message(format!("gateway launch task failed: {error}")))?
+}
+
+// Scoped, single-purpose stop for a gateway launched via open_gateway --
+// there is no `unmount` equivalent for it (no control socket, no mount
+// entry), and this is deliberately narrower than the general Force-stop
+// pattern reserved for §17.8 (opt-in, any wedged mount). Two independent
+// checks gate this, not one: `pid` must be in known_gateway_pids() (a pid
+// THIS process itself parsed from its own spawned child's stdout in
+// open_gateway_blocking, never trusted from whatever a frontend caller
+// supplies -- Tauri's own capability system gates only plugin commands, not
+// app-defined ones, so a compromised/buggy renderer could otherwise invoke
+// this with any u32), AND pid_is_mountos_process must still hold (closes the
+// window where a known-but-since-reused pid was picked up by an unrelated
+// process after the gateway already exited on its own). A small residual
+// TOCTOU remains between that check and the kill/taskkill call below; no
+// atomic cross-platform check-and-kill-by-identity primitive exists, so this
+// is an accepted residual, same class as the symlink-race note in
+// mountos-servers' gateway_descriptor.go.
+// A pid launched via open_gateway and never stopped through this app (killed
+// externally, crashed, exited on idle-timeout) stays in known_gateway_pids
+// forever otherwise -- widening, without bound, the window in which the OS
+// could hand that same pid number to an unrelated mountos-family process
+// (this machine alone runs dozens, see mos-load-*) that stop_gateway would
+// then also be willing to act on. Opportunistic, not exhaustive: still a
+// residual TOCTOU between this call and the next (no cross-platform
+// process-identity/start-time check exists to close it further), but no
+// longer unbounded -- every gateway launch/stop call now re-checks every pid
+// this process still thinks is live.
+fn reconcile_known_gateway_pids() {
+    let mut guard = known_gateway_pids()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    guard.retain(|&pid| pid_is_mountos_process(pid).unwrap_or(true));
+}
+
+fn stop_gateway_blocking(pid: u32) -> Result<(), DesktopError> {
+    reconcile_known_gateway_pids();
+    let is_known = known_gateway_pids()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .contains(&pid);
+    if !is_known {
+        return Err(DesktopError::Message(format!(
+            "PID {pid} was not discovered by this app's own gateway launch -- refusing to stop it"
+        )));
+    }
+    if !pid_is_mountos_process(pid)? {
+        known_gateway_pids()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&pid);
+        return Err(DesktopError::Message(format!(
+            "no running mountos process at PID {pid} -- it may have already exited"
+        )));
+    }
+    #[cfg(windows)]
+    let status = Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/F"])
+        .status()?;
+    #[cfg(not(windows))]
+    let status = Command::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .status()?;
+    known_gateway_pids()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .remove(&pid);
+    if status.success() {
+        Ok(())
+    } else {
+        Err(DesktopError::Message(format!(
+            "failed to stop gateway process {pid} (exit {status})"
+        )))
+    }
+}
+
+#[cfg(windows)]
+fn pid_is_mountos_process(pid: u32) -> Result<bool, DesktopError> {
+    let output = Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+        .output()?;
+    let text = String::from_utf8_lossy(&output.stdout).to_ascii_lowercase();
+    Ok(text.contains("mountos") || text.contains("mfuse"))
+}
+
+#[cfg(not(windows))]
+fn pid_is_mountos_process(pid: u32) -> Result<bool, DesktopError> {
+    let output = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "comm="])
+        .output()?;
+    if !output.status.success() {
+        return Ok(false);
+    }
+    let comm = String::from_utf8_lossy(&output.stdout).to_ascii_lowercase();
+    Ok(comm.contains("mountos") || comm.contains("mfuse"))
+}
+
+#[tauri::command]
+async fn stop_gateway(pid: u32) -> Result<(), DesktopError> {
+    tauri::async_runtime::spawn_blocking(move || stop_gateway_blocking(pid))
+        .await
+        .map_err(|error| DesktopError::Message(format!("stop gateway task failed: {error}")))?
 }
 
 fn unmount_target_blocking(target: String) -> Result<UnmountResult, DesktopError> {
@@ -2259,6 +3599,15 @@ pub fn run() {
             delete_profile_secret,
             get_profile_secret_status,
             mount_profile,
+            fork_list_raw,
+            fork_create,
+            fork_delete,
+            fork_restore,
+            open_snapshot_view,
+            open_deleted_view,
+            open_version_view,
+            open_gateway,
+            stop_gateway,
             unmount_target,
             unmount_all_targets,
             open_target,
@@ -2301,6 +3650,7 @@ mod tests {
             extra_args: vec!["--disk-cache-size".to_string(), "10G".to_string()],
             created_at: "2026-07-10T00:00:00Z".to_string(),
             updated_at: "2026-07-10T00:00:00Z".to_string(),
+            volume_kind: None,
         }
     }
 
@@ -2346,6 +3696,13 @@ mod tests {
         assert!(validate_mount_path_for_backend(&Backend::Fskit, "").is_err());
         // Case-sensitive: the real FSKit registration is a literal path match.
         assert!(validate_mount_path_for_backend(&Backend::Fskit, "/volumes/mountos/Team").is_err());
+        // A ".." component must not lexically escape the jail even though the
+        // path doesn't exist yet (no canonicalize) and the prefix bytes match.
+        assert!(validate_mount_path_for_backend(
+            &Backend::Fskit,
+            "/Volumes/MountOS/x/../../../../../etc/cron.d/evil"
+        )
+        .is_err());
         // Non-FSKit backends are never gated by this check.
         assert!(validate_mount_path_for_backend(&Backend::Nfs, "/tmp/anything").is_ok());
         assert!(validate_mount_path_for_backend(&Backend::Nfs, "").is_ok());
@@ -2410,6 +3767,13 @@ mod tests {
         assert_eq!(
             validate_extra_args(&["--mount".to_string(), "/tmp/other".to_string()]),
             vec!["--mount".to_string(), "/tmp/other".to_string()]
+        );
+        // --destination is a real alias for -m on the deleted/version commands
+        // now, so it must be blocked exactly like --mount -- otherwise a
+        // stray value here would silently redirect a satellite view mount.
+        assert_eq!(
+            validate_extra_args(&["--destination".to_string(), "/tmp/other".to_string()]),
+            vec!["--destination".to_string(), "/tmp/other".to_string()]
         );
     }
 
@@ -2504,5 +3868,311 @@ mod tests {
         assert_eq!(export_file_stem("a/b\\c:d", "id"), "a-b-c-d");
         assert_eq!(export_file_stem("///", "fallback-id"), "fallback-id");
         assert_eq!(export_file_stem("", "fallback-id"), "fallback-id");
+    }
+
+    #[test]
+    fn builds_snapshot_argv_with_fused_timestamp_flag_and_dash_m() {
+        let argv = build_snapshot_argv(&profile(), "/tmp/snap-view", "-1d");
+        // Fused as ONE token: a separate `--timestamp -1d` pair would risk
+        // pflag misparsing the leading-minus value as another flag.
+        assert!(argv.contains(&"--timestamp=-1d".to_string()));
+        assert!(!argv.iter().any(|arg| arg == "--timestamp"));
+        // snapshot has no --destination flag (verified against
+        // cmd_snapshot.go): -m is its only mount-point flag.
+        assert!(argv.windows(2).any(|pair| pair == ["-m", "/tmp/snap-view"]));
+        assert!(!argv.contains(&"--destination".to_string()));
+
+        let padded = build_snapshot_argv(&profile(), "/tmp/snap-view", "  -1d  ");
+        assert!(padded.contains(&"--timestamp=-1d".to_string()));
+    }
+
+    #[test]
+    fn builds_deleted_argv_uses_destination_and_omits_optional_flags_when_blank() {
+        let bare = build_deleted_argv(&profile(), "/tmp/deleted-view", None, None);
+        assert!(bare
+            .windows(2)
+            .any(|pair| pair == ["--destination", "/tmp/deleted-view"]));
+        assert!(!bare.contains(&"-m".to_string()));
+        assert!(!bare.iter().any(|arg| arg.starts_with("--from")));
+        assert!(!bare.iter().any(|arg| arg.starts_with("--idle-timeout")));
+
+        let full = build_deleted_argv(&profile(), "/tmp/deleted-view", Some("30d"), Some("1h"));
+        assert!(full.contains(&"--from=30d".to_string()));
+        assert!(full.contains(&"--idle-timeout=1h".to_string()));
+
+        // Go's DurationVar doesn't trim, so surrounding whitespace in the
+        // field must be stripped here rather than passed through verbatim.
+        let padded = build_deleted_argv(&profile(), "/tmp/deleted-view", None, Some("  1h  "));
+        assert!(padded.contains(&"--idle-timeout=1h".to_string()));
+
+        let padded_from = build_deleted_argv(&profile(), "/tmp/deleted-view", Some("  30d  "), None);
+        assert!(padded_from.contains(&"--from=30d".to_string()));
+    }
+
+    #[test]
+    fn builds_version_argv_treats_inode_as_string_safe_u64() {
+        // Round-trips at u64::MAX unchanged: the string-not-number decision
+        // guards against precision loss above Number.MAX_SAFE_INTEGER on the
+        // JS side, which a numeric type here would silently reintroduce.
+        let argv = build_version_argv(&profile(), "/tmp/version-view", u64::MAX, None, None);
+        assert!(argv
+            .windows(2)
+            .any(|pair| pair == ["-i", &u64::MAX.to_string()]));
+        assert!(argv
+            .windows(2)
+            .any(|pair| pair == ["--destination", "/tmp/version-view"]));
+        // "number" is the CLI's own default; omit the flag rather than
+        // stating the default explicitly.
+        assert!(!argv.iter().any(|arg| arg.starts_with("--version-format")));
+
+        let dated = build_version_argv(&profile(), "/tmp/version-view", 1, Some("date"), Some("5m"));
+        assert!(dated.contains(&"--version-format=date".to_string()));
+        assert!(dated.contains(&"--idle-timeout=5m".to_string()));
+
+        // cmd_version.go checks `format != "number" && format != "date"` with
+        // no trimming, so a padded value must be trimmed here or it fails
+        // that exact-match check server-side.
+        let padded = build_version_argv(&profile(), "/tmp/version-view", 1, Some("  date  "), None);
+        assert!(padded.contains(&"--version-format=date".to_string()));
+    }
+
+    #[test]
+    fn omits_backend_flag_for_view_mounts_on_os_managed_backends() {
+        let mut p = profile();
+        p.backend = Backend::Fileprovider;
+        let argv = build_deleted_argv(&p, "/tmp/deleted-view", None, None);
+        assert!(!argv.contains(&"--fileprovider".to_string()));
+
+        // CloudFilter is the opposite of FileProvider here: Windows has no
+        // safe no-flag default (hard-codes to mountosio, no capability
+        // probing), so the flag must be emitted explicitly.
+        p.backend = Backend::Cloudfilter;
+        let argv = build_deleted_argv(&p, "/tmp/deleted-view", None, None);
+        assert!(argv.windows(2).any(|pair| pair == ["--backend", "cloudfilter"]));
+
+        p.backend = Backend::Nfs;
+        let argv = build_deleted_argv(&p, "/tmp/deleted-view", None, None);
+        assert!(argv.contains(&"--nfs".to_string()));
+
+        p.backend = Backend::Macfuse;
+        let argv = build_snapshot_argv(&p, "/tmp/snap-view", "1d");
+        assert!(argv.contains(&"--macfuse".to_string()));
+    }
+
+    #[test]
+    fn rejects_fork_names_starting_with_hyphen_or_empty() {
+        assert!(validate_fork_name("").is_err());
+        assert!(validate_fork_name("   ").is_err());
+        assert!(validate_fork_name("-oops").is_err());
+        assert_eq!(validate_fork_name(" my-branch ").unwrap(), "my-branch");
+    }
+
+    #[test]
+    fn fork_argv_never_emits_type_flag_or_volume_flag() {
+        let p = profile();
+        let list = build_fork_list_argv(&p);
+        let create = build_fork_create_argv(&p, "child", Some("main"), Some("1d"));
+        let delete = build_fork_delete_argv(&p, "child", true);
+        let restore = build_fork_restore_argv(&p, "child");
+        for argv in [&list, &create, &delete, &restore] {
+            assert!(!argv.iter().any(|arg| arg.starts_with("--type")));
+            assert!(!argv.contains(&"--volname".to_string()));
+            assert!(!argv.contains(&"-m".to_string()));
+        }
+        assert!(list.contains(&"--json".to_string()));
+        assert!(create.contains(&"--parent=main".to_string()));
+        assert!(create.contains(&"--as-of=1d".to_string()));
+        // time.Parse/time.ParseInLocation don't trim, so surrounding
+        // whitespace must be stripped before it reaches argv.
+        let padded = build_fork_create_argv(&p, "child", Some("  main  "), Some("  1d  "));
+        assert!(padded.contains(&"--parent=main".to_string()));
+        assert!(padded.contains(&"--as-of=1d".to_string()));
+        assert!(delete.contains(&"--force".to_string()));
+        assert!(list.contains(&"list".to_string()));
+        assert!(restore.contains(&"restore".to_string()));
+    }
+
+    #[test]
+    fn satellite_volname_falls_back_when_profile_volume_empty() {
+        let mut p = profile();
+        assert_eq!(satellite_volname(&p, "snapshot"), "Team files (snapshot)");
+        p.volume = String::new();
+        assert_eq!(satellite_volname(&p, "deleted"), "mountOS deleted");
+    }
+
+    #[test]
+    fn view_destination_must_be_absolute_and_differ_from_profile_mount_path() {
+        let p = profile();
+        assert!(validate_view_destination(&p, "").is_err());
+        assert!(validate_view_destination(&p, "relative/path").is_err());
+        assert!(validate_view_destination(&p, &p.mount_path).is_err());
+        assert!(validate_view_destination(&p, "/tmp/some-other-view").is_ok());
+    }
+
+    #[test]
+    fn builds_gateway_only_argv_with_no_mount_point_or_volname() {
+        let p = profile();
+        let argv = build_gateway_argv(&p, &["s3".to_string()], None, true, false, None, None);
+        assert_eq!(argv[0], "gateway");
+        assert!(!argv.contains(&"-m".to_string()));
+        assert!(!argv.contains(&"--volname".to_string()));
+        assert!(argv.windows(2).any(|pair| pair == ["--fork-name", "main"]));
+        assert!(argv.contains(&"-s".to_string()));
+        assert!(argv.windows(2).any(|pair| pair == ["--gateway", "s3"]));
+    }
+
+    #[test]
+    fn builds_gateway_combo_argv_reusing_full_mount_argv() {
+        let p = profile();
+        let argv = build_gateway_argv(
+            &p,
+            &["s3".to_string(), "hdfs".to_string()],
+            Some("9001"),
+            false,
+            false,
+            None,
+            None,
+        );
+        assert_eq!(argv[0], "mount");
+        assert!(argv.windows(2).any(|pair| pair == ["-m", p.mount_path.as_str()]));
+        assert!(argv.windows(2).any(|pair| pair == ["--gateway", "s3,hdfs"]));
+        assert!(argv.windows(2).any(|pair| pair == ["--gateway-port", "9001"]));
+        assert!(!argv.contains(&"--gateway-only".to_string()));
+    }
+
+    #[test]
+    fn gateway_argv_omits_port_and_tls_when_blank() {
+        let p = profile();
+        let argv = build_gateway_argv(&p, &["s3".to_string()], Some("  "), true, false, None, None);
+        assert!(!argv.iter().any(|arg| arg == "--gateway-port"));
+        assert!(!argv.contains(&"--gateway-cert".to_string()));
+        assert!(!argv.contains(&"--gateway-key".to_string()));
+    }
+
+    #[test]
+    fn gateway_argv_emits_tls_flags_only_when_both_cert_and_key_present() {
+        let p = profile();
+        let argv = build_gateway_argv(
+            &p,
+            &["s3".to_string()],
+            None,
+            true,
+            true,
+            Some("/tmp/cert.pem"),
+            Some("/tmp/key.pem"),
+        );
+        assert!(argv.windows(2).any(|pair| pair == ["--gateway-cert", "/tmp/cert.pem"]));
+        assert!(argv.windows(2).any(|pair| pair == ["--gateway-key", "/tmp/key.pem"]));
+        assert!(argv.contains(&"--gateway-no-loopback".to_string()));
+
+        let missing_key = build_gateway_argv(&p, &["s3".to_string()], None, true, false, Some("/tmp/cert.pem"), None);
+        assert!(!missing_key.contains(&"--gateway-cert".to_string()));
+
+        // checkCertKeyReadable opens the path verbatim (no trimming); a
+        // padded value from a hand-typed field must be trimmed here or the
+        // file lookup fails even though the path itself is valid.
+        let padded = build_gateway_argv(
+            &p,
+            &["s3".to_string()],
+            None,
+            true,
+            true,
+            Some("  /tmp/cert.pem  "),
+            Some("  /tmp/key.pem  "),
+        );
+        assert!(padded.windows(2).any(|pair| pair == ["--gateway-cert", "/tmp/cert.pem"]));
+        assert!(padded.windows(2).any(|pair| pair == ["--gateway-key", "/tmp/key.pem"]));
+    }
+
+    #[test]
+    fn satellite_and_gateway_only_argv_include_cache_dir_and_extra_args() {
+        // profile() carries cache_dir "/tmp/mountos cache" and extra_args
+        // ["--disk-cache-size", "10G"] -- the server resolves these
+        // unconditionally regardless of subcommand, so every builder besides
+        // the mount+gateway combo (which already goes through
+        // build_mount_argv) must emit them too.
+        let p = profile();
+        let snapshot = build_snapshot_argv(&p, "/tmp/snap-view", "1d");
+        let deleted = build_deleted_argv(&p, "/tmp/deleted-view", None, None);
+        let version = build_version_argv(&p, "/tmp/version-view", 1, None, None);
+        let gateway_only = build_gateway_argv(&p, &["s3".to_string()], None, true, false, None, None);
+        for argv in [&snapshot, &deleted, &version, &gateway_only] {
+            assert!(
+                argv.windows(2)
+                    .any(|pair| pair == ["--disk-cache-dir", "/tmp/mountos cache"]),
+                "missing --disk-cache-dir in {argv:?}"
+            );
+            assert!(
+                argv.windows(2)
+                    .any(|pair| pair == ["--disk-cache-size", "10G"]),
+                "missing extra_args in {argv:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn finds_gateway_descriptor_by_exact_pid_only() {
+        let dir = std::env::temp_dir();
+        // A same-volume, same-machine descriptor at a DIFFERENT pid must
+        // never be picked up -- this is exactly the misattribution the
+        // pid-exact lookup replaces a fuzzy volume-name+recency scan to
+        // avoid (a stale heuristic could otherwise hand this launch a
+        // different launch's live PID, which then feeds straight into
+        // Stop-gateway).
+        let other_path = dir.join("mountOS-999902.gateway.json");
+        fs::write(
+            &other_path,
+            r#"{"endpoints":{"s3":{"url":"http://127.0.0.1:2"}},"volume_name":"Team files","pid":999902}"#,
+        )
+        .unwrap();
+
+        let match_path = dir.join("mountOS-999903.gateway.json");
+        fs::write(
+            &match_path,
+            r#"{"endpoints":{"s3":{"url":"http://127.0.0.1:9001","region":"us-east-1"}},"volume_name":"Team files","pid":999903}"#,
+        )
+        .unwrap();
+
+        let found = find_gateway_descriptor(999903);
+
+        fs::remove_file(&other_path).ok();
+        fs::remove_file(&match_path).ok();
+
+        let descriptor = found.expect("expected the exact-pid descriptor");
+        assert_eq!(descriptor.pid, 999903);
+        assert_eq!(descriptor.endpoints["s3"].url, "http://127.0.0.1:9001");
+        assert_eq!(descriptor.endpoints["s3"].region, "us-east-1");
+
+        assert!(find_gateway_descriptor(999_999_001).is_none());
+    }
+
+    #[test]
+    fn parses_started_pid_from_daemon_stdout() {
+        assert_eq!(
+            parse_started_pid("mountOS started with PID: 12345\n"),
+            Some(12345)
+        );
+        assert_eq!(
+            parse_started_pid("some log line\nmountOS started with PID: 42\nmore output\n"),
+            Some(42)
+        );
+        assert_eq!(parse_started_pid("no pid line here"), None);
+        assert_eq!(parse_started_pid("started with PID: "), None);
+    }
+
+    #[test]
+    fn stop_gateway_refuses_a_pid_it_never_discovered() {
+        // Regression guard for the trust boundary itself: a pid must be
+        // registered via known_gateway_pids() before stop_gateway_blocking
+        // will even consider it, independent of whether a process happens
+        // to exist at that number.
+        let unknown_pid = 999_999_002;
+        assert!(!known_gateway_pids()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .contains(&unknown_pid));
+        let result = stop_gateway_blocking(unknown_pid);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("refusing to stop"));
     }
 }

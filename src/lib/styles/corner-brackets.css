@@ -1,0 +1,686 @@
+/* Corner Bracket Design System */
+/* Inspired by technical/cyberpunk UI aesthetics */
+
+@layer base {
+  :root {
+    /* Palette mapped onto theme tokens so brackets follow the active skin.
+       Tokens are already mode-aware, so the -dark variants (kept for the
+       existing .dark selectors below) resolve through the same tokens. */
+    --bracket-color: var(--muted-foreground);
+    --bracket-color-dark: var(--muted-foreground);
+    --bracket-hover: var(--primary);
+    --bracket-hover-dark: var(--primary);
+    --th-color: var(--label-foreground);
+    --th-color-hover: var(--foreground);
+    --th-color-dark: var(--label-foreground);
+    --th-color-dark-hover: var(--foreground);
+    --th-line: var(--primary);
+    --th-line-dark: var(--primary);
+    --surface-light: var(--card);
+    --surface-dark: var(--card);
+    --grid-line: oklch(0.3 0.002 200);
+    --accent-glow: var(--primary);
+    --accent-glow-dark: var(--primary);
+  }
+}
+
+@layer components {
+  /* Corner brackets - Standard (12px) */
+  .corner-brackets {
+    position: relative;
+  }
+
+  /* Standard fixed-size corners - positioned OUTSIDE the border */
+  .corner-brackets::before {
+    content: "";
+    position: absolute;
+    inset: -2px;
+    background:
+      /* Top-left corner */
+      linear-gradient(to right, currentColor 20px, transparent 20px) 0 0 / 20px 2px,
+      linear-gradient(to bottom, currentColor 20px, transparent 20px) 0 0 / 2px 20px,
+      /* Top-right corner */ linear-gradient(to left, currentColor 20px, transparent 20px) 100% 0 /
+        20px 2px,
+      linear-gradient(to bottom, currentColor 20px, transparent 20px) 100% 0 / 2px 20px,
+      /* Bottom-left corner */ linear-gradient(to right, currentColor 20px, transparent 20px) 0
+        100% / 20px 2px,
+      linear-gradient(to top, currentColor 20px, transparent 20px) 0 100% / 2px 20px,
+      /* Bottom-right corner */ linear-gradient(to left, currentColor 20px, transparent 20px) 100%
+        100% / 20px 2px,
+      linear-gradient(to top, currentColor 20px, transparent 20px) 100% 100% / 2px 20px;
+    background-repeat: no-repeat;
+    color: var(--bracket-color);
+    pointer-events: none;
+  }
+
+  /* Dynamic corners - scale with card width */
+  .corner-brackets-dynamic::before {
+    content: "";
+    position: absolute;
+    inset: -2px;
+    background:
+      linear-gradient(
+          to right,
+          currentColor clamp(24px, 8%, 60px),
+          transparent clamp(24px, 8%, 60px)
+        )
+        0 0 / clamp(24px, 8%, 60px) 2px,
+      linear-gradient(
+          to bottom,
+          currentColor clamp(24px, 8%, 60px),
+          transparent clamp(24px, 8%, 60px)
+        )
+        0 0 / 2px clamp(24px, 8%, 60px),
+      linear-gradient(
+          to left,
+          currentColor clamp(24px, 8%, 60px),
+          transparent clamp(24px, 8%, 60px)
+        )
+        100% 0 / clamp(24px, 8%, 60px) 2px,
+      linear-gradient(
+          to bottom,
+          currentColor clamp(24px, 8%, 60px),
+          transparent clamp(24px, 8%, 60px)
+        )
+        100% 0 / 2px clamp(24px, 8%, 60px),
+      linear-gradient(
+          to right,
+          currentColor clamp(24px, 8%, 60px),
+          transparent clamp(24px, 8%, 60px)
+        )
+        0 100% / clamp(24px, 8%, 60px) 2px,
+      linear-gradient(to top, currentColor clamp(24px, 8%, 60px), transparent clamp(24px, 8%, 60px))
+        0 100% / 2px clamp(24px, 8%, 60px),
+      linear-gradient(
+          to left,
+          currentColor clamp(24px, 8%, 60px),
+          transparent clamp(24px, 8%, 60px)
+        )
+        100% 100% / clamp(24px, 8%, 60px) 2px,
+      linear-gradient(to top, currentColor clamp(24px, 8%, 60px), transparent clamp(24px, 8%, 60px))
+        100% 100% / 2px clamp(24px, 8%, 60px);
+    background-repeat: no-repeat;
+    color: var(--bracket-color);
+    pointer-events: none;
+  }
+
+  .dark .corner-brackets::before {
+    color: var(--bracket-color-dark);
+  }
+
+  /* Large corner brackets */
+  .corner-brackets-lg {
+    position: relative;
+  }
+
+  .corner-brackets-lg::before {
+    content: "";
+    position: absolute;
+    inset: -2px;
+    background:
+      linear-gradient(
+          to right,
+          currentColor clamp(24px, 8%, 60px),
+          transparent clamp(24px, 8%, 60px)
+        )
+        0 0 / clamp(24px, 8%, 60px) 2px,
+      linear-gradient(
+          to bottom,
+          currentColor clamp(24px, 8%, 60px),
+          transparent clamp(24px, 8%, 60px)
+        )
+        0 0 / 2px clamp(24px, 8%, 60px),
+      linear-gradient(
+          to left,
+          currentColor clamp(24px, 8%, 60px),
+          transparent clamp(24px, 8%, 60px)
+        )
+        100% 0 / clamp(24px, 8%, 60px) 2px,
+      linear-gradient(
+          to bottom,
+          currentColor clamp(24px, 8%, 60px),
+          transparent clamp(24px, 8%, 60px)
+        )
+        100% 0 / 2px clamp(24px, 8%, 60px),
+      linear-gradient(
+          to right,
+          currentColor clamp(24px, 8%, 60px),
+          transparent clamp(24px, 8%, 60px)
+        )
+        0 100% / clamp(24px, 8%, 60px) 2px,
+      linear-gradient(to top, currentColor clamp(24px, 8%, 60px), transparent clamp(24px, 8%, 60px))
+        0 100% / 2px clamp(24px, 8%, 60px),
+      linear-gradient(
+          to left,
+          currentColor clamp(24px, 8%, 60px),
+          transparent clamp(24px, 8%, 60px)
+        )
+        100% 100% / clamp(24px, 8%, 60px) 2px,
+      linear-gradient(to top, currentColor clamp(24px, 8%, 60px), transparent clamp(24px, 8%, 60px))
+        100% 100% / 2px clamp(24px, 8%, 60px);
+    background-repeat: no-repeat;
+    color: var(--bracket-color);
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  /* Fixed-size large corners */
+  .corner-brackets-lg-fixed::before {
+    content: "";
+    position: absolute;
+    inset: -2px;
+    background:
+      linear-gradient(to right, currentColor 32px, transparent 32px) 0 0 / 32px 2px,
+      linear-gradient(to bottom, currentColor 32px, transparent 32px) 0 0 / 2px 32px,
+      linear-gradient(to left, currentColor 32px, transparent 32px) 100% 0 / 32px 2px,
+      linear-gradient(to bottom, currentColor 32px, transparent 32px) 100% 0 / 2px 32px,
+      linear-gradient(to right, currentColor 32px, transparent 32px) 0 100% / 32px 2px,
+      linear-gradient(to top, currentColor 32px, transparent 32px) 0 100% / 2px 32px,
+      linear-gradient(to left, currentColor 32px, transparent 32px) 100% 100% / 32px 2px,
+      linear-gradient(to top, currentColor 32px, transparent 32px) 100% 100% / 2px 32px;
+    background-repeat: no-repeat;
+    color: var(--bracket-color);
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  .dark .corner-brackets-lg::before {
+    color: var(--bracket-color-dark);
+  }
+
+  .dark .corner-brackets-dynamic::before {
+    color: var(--bracket-color-dark);
+  }
+
+  .dark .corner-brackets-lg-fixed::before {
+    color: var(--bracket-color-dark);
+  }
+
+  /* Hover and focus states - primary color */
+  .corner-brackets,
+  .corner-brackets-lg,
+  .corner-brackets-lg-fixed,
+  .corner-brackets-dynamic {
+    --bracket-active: var(--accent-glow);
+  }
+
+  .dark .corner-brackets,
+  .dark .corner-brackets-lg,
+  .dark .corner-brackets-lg-fixed,
+  .dark .corner-brackets-dynamic {
+    --bracket-active: var(--accent-glow-dark);
+  }
+
+  /* :focus-within alone already covers "a descendant has focus" (our only
+     actual use case: a search input inside a bracketed panel) with no
+     feature-query indirection, unlike the admin-client original this file
+     was copied from, which also guards for :has(:focus-visible) via a
+     @supports selector() split. Collapsed to one unconditional rule after
+     the split version failed to trigger the hover/focus-within color swap
+     in this app's Tauri webview. */
+  .corner-brackets:is(:hover, :focus-within)::before,
+  .corner-brackets-lg:is(:hover, :focus-within)::before,
+  .corner-brackets-lg-fixed:is(:hover, :focus-within)::before,
+  .corner-brackets-dynamic:is(:hover, :focus-within)::before {
+    color: var(--bracket-active);
+  }
+
+  /* Corner plus sign - positioned at top-right */
+  .corner-plus {
+    position: relative;
+  }
+
+  .corner-plus::after {
+    content: "+";
+    position: absolute;
+    top: -1px;
+    right: -1px;
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: 300;
+    line-height: 1;
+    color: var(--bracket-color);
+    background: var(--surface-light);
+    pointer-events: none;
+    z-index: 2;
+  }
+
+  .dark .corner-plus::after {
+    color: var(--bracket-color-dark);
+    background: var(--surface-dark);
+  }
+
+  .corner-plus:hover::after {
+    color: var(--bracket-hover);
+  }
+
+  .dark .corner-plus:hover::after {
+    color: var(--bracket-hover-dark);
+  }
+
+  /* Corner plus at bottom-left */
+  .corner-plus-bl::after {
+    content: "+";
+    position: absolute;
+    bottom: -1px;
+    left: -1px;
+    top: auto;
+    right: auto;
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: 300;
+    line-height: 1;
+    color: var(--bracket-color);
+    background: var(--surface-light);
+    pointer-events: none;
+    z-index: 2;
+  }
+
+  .dark .corner-plus-bl::after {
+    color: var(--bracket-color-dark);
+    background: var(--surface-dark);
+  }
+
+  .corner-plus-bl:hover::after {
+    color: var(--bracket-hover);
+  }
+
+  .dark .corner-plus-bl:hover::after {
+    color: var(--bracket-hover-dark);
+  }
+
+  /* Technical grid pattern background */
+  .tech-grid {
+    background-image:
+      linear-gradient(var(--grid-line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+    background-size: 20px 20px;
+    background-position: -1px -1px;
+  }
+
+  .dark .tech-grid {
+    background-image:
+      linear-gradient(oklch(0.93 0.005 200 / 0.3) 1px, transparent 1px),
+      linear-gradient(90deg, oklch(0.93 0.005 200 / 0.3) 1px, transparent 1px);
+  }
+
+  /* Dashed connecting lines */
+  .dashed-connector {
+    border: none;
+    border-top: 1px dashed var(--grid-line);
+    opacity: 0.5;
+  }
+
+  .dark .dashed-connector {
+    border-top-color: var(--bracket-color-dark);
+  }
+
+  /* Minimal borders */
+  .border-minimal {
+    border: 1px solid var(--grid-line);
+  }
+
+  .dark .border-minimal {
+    border-color: var(--bracket-color-dark);
+  }
+
+  /* Cyberpunk skewed corners */
+  .cyberpunk-skewed {
+    position: relative;
+    clip-path: polygon(
+      0 20px,
+      20px 0,
+      100% 0,
+      100% calc(100% - 20px),
+      calc(100% - 20px) 100%,
+      0 100%
+    );
+  }
+
+  .cyberpunk-skewed-inner {
+    padding: 2rem;
+  }
+
+  .cyberpunk-skewed::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(135deg, currentColor 2px, transparent 2px) 0 0 / 28px 28px,
+      linear-gradient(-45deg, currentColor 2px, transparent 2px) 100% 100% / 28px 28px;
+    background-repeat: no-repeat;
+    color: var(--bracket-color);
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  .dark .cyberpunk-skewed::before {
+    color: var(--bracket-color-dark);
+  }
+
+  .cyberpunk-skewed:hover::before {
+    color: var(--bracket-hover);
+  }
+
+  .dark .cyberpunk-skewed:hover::before {
+    color: var(--bracket-hover-dark);
+  }
+
+  /* Reverse skewed corners (top-right + bottom-left) */
+  .cyberpunk-rskewed {
+    position: relative;
+    clip-path: polygon(
+      0 0,
+      calc(100% - 20px) 0,
+      100% 20px,
+      100% 100%,
+      20px 100%,
+      0 calc(100% - 20px)
+    );
+  }
+
+  .cyberpunk-rskewed::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(225deg, currentColor 2px, transparent 2px) 100% 0 / 28px 28px,
+      linear-gradient(45deg, currentColor 2px, transparent 2px) 0 100% / 28px 28px;
+    background-repeat: no-repeat;
+    color: var(--bracket-color);
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  .dark .cyberpunk-rskewed::before {
+    color: var(--bracket-color-dark);
+  }
+
+  .cyberpunk-rskewed:hover::before {
+    color: var(--bracket-hover);
+  }
+
+  .dark .cyberpunk-rskewed:hover::before {
+    color: var(--bracket-hover-dark);
+  }
+
+  /* Left-skewed corners (top-left + bottom-left) */
+  .cyberpunk-lskewed {
+    position: relative;
+    clip-path: polygon(
+      0 20px,
+      20px 0,
+      100% 0,
+      100% 100%,
+      20px 100%,
+      0 calc(100% - 20px)
+    );
+  }
+
+  .cyberpunk-lskewed::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(135deg, currentColor 2px, transparent 2px) 0 0 / 28px 28px,
+      linear-gradient(45deg, currentColor 2px, transparent 2px) 0 100% / 28px 28px;
+    background-repeat: no-repeat;
+    color: var(--bracket-color);
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  .dark .cyberpunk-lskewed::before {
+    color: var(--bracket-color-dark);
+  }
+
+  .cyberpunk-lskewed:hover::before {
+    color: var(--bracket-hover);
+  }
+
+  .dark .cyberpunk-lskewed:hover::before {
+    color: var(--bracket-hover-dark);
+  }
+
+  /* Large variant with more pronounced skew */
+  .cyberpunk-skewed-lg {
+    position: relative;
+    clip-path: polygon(
+      0 32px,
+      32px 0,
+      100% 0,
+      100% calc(100% - 32px),
+      calc(100% - 32px) 100%,
+      0 100%
+    );
+  }
+
+  .cyberpunk-skewed-lg::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(135deg, currentColor 2px, transparent 2px) 0 0 / 45px 45px,
+      linear-gradient(-45deg, currentColor 2px, transparent 2px) 100% 100% / 45px 45px;
+    background-repeat: no-repeat;
+    color: var(--bracket-color);
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  .dark .cyberpunk-skewed-lg::before {
+    color: var(--bracket-color-dark);
+  }
+
+  .cyberpunk-skewed-lg:hover::before {
+    color: var(--bracket-hover);
+  }
+
+  .dark .cyberpunk-skewed-lg:hover::before {
+    color: var(--bracket-hover-dark);
+  }
+
+  /* Small variant for buttons (6px cuts) */
+  .cyberpunk-skewed-sm {
+    position: relative;
+    clip-path: polygon(
+      0 6px,
+      6px 0,
+      100% 0,
+      100% calc(100% - 6px),
+      calc(100% - 6px) 100%,
+      0 100%
+    );
+  }
+
+  .cyberpunk-skewed-sm::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(135deg, currentColor 1px, transparent 1px) 0 0 / 9px 9px,
+      linear-gradient(-45deg, currentColor 1px, transparent 1px) 100% 100% / 9px 9px;
+    background-repeat: no-repeat;
+    color: var(--bracket-color);
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  .dark .cyberpunk-skewed-sm::before {
+    color: var(--bracket-color-dark);
+  }
+
+  .cyberpunk-skewed-sm:hover::before {
+    color: var(--bracket-hover);
+  }
+
+  .dark .cyberpunk-skewed-sm:hover::before {
+    color: var(--bracket-hover-dark);
+  }
+
+  /* Cyberpunk card accent; top-edge glow + hover halo */
+  .card-cyber {
+    box-shadow: inset 0 1px 0 oklch(from var(--accent-glow) l c h / 0.2);
+    transition: box-shadow 0.3s ease;
+  }
+
+  .card-cyber:hover {
+    box-shadow:
+      inset 0 1px 0 oklch(from var(--accent-glow) l c h / 0.5),
+      0 0 24px oklch(from var(--accent-glow) l c h / 0.07);
+  }
+
+  .dark .card-cyber {
+    box-shadow: inset 0 1px 0 oklch(from var(--accent-glow-dark) l c h / 0.15);
+  }
+
+  .dark .card-cyber:hover {
+    box-shadow:
+      inset 0 1px 0 oklch(from var(--accent-glow-dark) l c h / 0.45),
+      0 0 24px oklch(from var(--accent-glow-dark) l c h / 0.08);
+  }
+
+  /* Cyberpunk stat cell; bottom scan-line on hover */
+  .stat-cyber {
+    position: relative;
+  }
+
+  .stat-cyber::after {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    left: 10%;
+    right: 10%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, oklch(from var(--accent-glow) l c h / 0.35), transparent);
+    transform: scaleX(0);
+    transition: transform 0.3s ease;
+    pointer-events: none;
+  }
+
+  .stat-cyber:hover::after {
+    transform: scaleX(1);
+  }
+
+  .dark .stat-cyber::after {
+    background: linear-gradient(90deg, transparent, oklch(from var(--accent-glow-dark) l c h / 0.35), transparent);
+  }
+
+  /* Cyberpunk table header labels; scan-line underline */
+  .th-cyber {
+    position: relative;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.2em;
+    color: var(--th-color);
+    padding-bottom: 0.5rem !important;
+  }
+
+  .th-cyber::after {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--th-line), transparent);
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform 0.4s ease;
+  }
+
+  .th-cyber:hover::after {
+    transform: scaleX(1);
+  }
+
+  .th-cyber:hover {
+    color: var(--th-color-hover);
+  }
+
+  .dark .th-cyber {
+    color: var(--th-color-dark);
+  }
+
+  .dark .th-cyber::after {
+    background: linear-gradient(90deg, transparent, var(--th-line-dark), transparent);
+  }
+
+  .dark .th-cyber:hover {
+    color: var(--th-color-dark-hover);
+  }
+
+  thead:has(.th-cyber) tr {
+    border-bottom-color: oklch(from var(--bracket-color) l c h / 0.3);
+  }
+
+  /* Ensure all th in cyber rows can host brackets */
+  thead:has(.th-cyber) th:first-child,
+  thead:has(.th-cyber) th:last-child {
+    position: relative;
+  }
+
+  /* Top-left bracket: first th in the row */
+  thead:has(.th-cyber) th:first-child::before {
+    content: '';
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 14px;
+    height: 14px;
+    border: none;
+    border-top: 1px solid var(--bracket-color);
+    border-left: 1px solid var(--bracket-color);
+    opacity: 0.4;
+    pointer-events: none;
+  }
+
+  /* Bottom-right bracket: last th in the row */
+  thead:has(.th-cyber) th:last-child::before {
+    content: '';
+    position: absolute;
+    inset: auto 0 0 auto;
+    width: 14px;
+    height: 14px;
+    border: none;
+    border-bottom: 1px solid var(--bracket-color);
+    border-right: 1px solid var(--bracket-color);
+    opacity: 0.4;
+    pointer-events: none;
+  }
+
+  .dark thead:has(.th-cyber) tr {
+    border-bottom-color: oklch(from var(--bracket-color-dark) l c h / 0.3);
+  }
+
+  .dark thead:has(.th-cyber) th:first-child::before {
+    border-top-color: var(--bracket-color-dark);
+    border-left-color: var(--bracket-color-dark);
+  }
+
+  .dark thead:has(.th-cyber) th:last-child::before {
+    border-bottom-color: var(--bracket-color-dark);
+    border-right-color: var(--bracket-color-dark);
+  }
+
+  /* clip-path clips an element's entire painted output, including any
+     box-shadow-based focus ring (every ui/* component's own
+     focus-visible:ring-*) that would otherwise extend past the border box.
+     Dropping the clip on :focus-visible trades a momentarily-square corner
+     for a focus ring that is actually visible -- a real WCAG 2.4.7 fix, not
+     a style preference. Only -sm is covered: it's the only cyberpunk-skewed
+     variant this app actually uses (on button footers), and unclipping on
+     :focus-within instead for the larger, container-level variants would
+     suppress their chamfer for nearly a dialog's entire open lifetime, since
+     something inside is normally focused. Deliberate divergence from the
+     admin-client original, which has the same gap. */
+  .cyberpunk-skewed-sm:focus-visible {
+    clip-path: none;
+  }
+}

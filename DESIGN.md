@@ -24,6 +24,7 @@ colors:
   accent-dark: "oklch(0.16 0.008 200)"
   destructive-light: "oklch(0.54 0.24 24.42)"
   destructive-dark: "oklch(0.59 0.20 21)"
+  destructive-foreground: "oklch(1 0 0)"
   warning-light: "oklch(0.45 0.16 55)"
   warning-dark: "oklch(0.78 0.15 75)"
   success-light: "oklch(0.49 0.17 155)"
@@ -110,19 +111,12 @@ components:
     rounded: "{rounded.sm}"
     padding: "8px 16px"
     height: "36px"
-  button-primary-hover:
-    backgroundColor: "{colors.ring-light}"
   button-destructive:
     backgroundColor: "transparent"
     textColor: "{colors.destructive-light}"
     rounded: "{rounded.sm}"
     padding: "8px 16px"
     height: "36px"
-  button-ghost:
-    backgroundColor: "transparent"
-    textColor: "{colors.foreground-light}"
-    rounded: "{rounded.sm}"
-    padding: "8px 16px"
   button-sm:
     backgroundColor: "transparent"
     textColor: "{colors.foreground-light}"
@@ -144,131 +138,38 @@ components:
 
 # Design System: mountOS Desktop
 
-**Provenance.** This system mirrors `mountos-admin-client/DESIGN.md` ("The Operator's Console"). Color, typography, spacing, and component tokens are shared across the mountOS surfaces; a token change here must be mirrored there and vice versa. Utilities in this repo live in `src/app.css` (vanilla CSS, no Tailwind).
+**Provenance.** This system mirrors `mountos-admin-client/DESIGN.md` ("The Operator's Console") — read that file first; it's the source of truth for tokens, typography, and component behavior. Both apps share the same `src/lib/components/ui/*` component set (Button, Input, Textarea, Checkbox, Label, Badge, Separator, Select, Popover, Dialog, Table, Skeleton, Sonner, Calendar/DateTimePicker), the same `src/lib/components/shared/{DateTimePicker,InfoTip}.svelte`, and the same `src/lib/styles/corner-brackets.css` cyberpunk system — all copied file-for-file from `mountos-admin-client` and kept in sync deliberately; a change to a shared component, token, or style file there should be mirrored here, and vice versa. `src/lib/utils.ts`'s `cn()` and Tailwind v4 (via `@theme inline`, mapped onto the OKLCH custom properties in `src/app.css`) work the same way in both repos.
 
-## 1. Overview
+This file exists only to record what's genuinely different about the desktop client: a handful of app-specific leftovers with no admin-client equivalent, and platform constraints admin-client doesn't have.
 
-**Creative North Star: "The Operator's Console"**
+## Platform
 
-A control surface for people who mount and operate filesystems, not a marketing site. The visual language borrows from radar terminals and mission-control consoles: warm-on-cold light mode, golden-on-deep-teal dark mode, near-zero radii, corner brackets that frame data without competing with it. Density is the goal. Every pixel either carries information or stays out of the way.
+**Desktop only, not responsive.** A native macOS/Windows app window (Tauri), not a web page. `tauri.conf.json` enforces `minWidth: 860 / minHeight: 560` on the main window; there is no mobile or tablet target. The tray-popover window (`TrayPopover.svelte`) is a second, fixed-size native surface with its own minimal layout, not a breakpoint of the main window.
 
-The system rejects the SaaS dashboard reflex of soft cards, rounded edges, decorative gradients, and hand-holding empty states. Users are experts; the interface treats them as such. Color is rationed: rust-amber primary in light, gold in dark, red-orange destructive, and entity-coded pastels reserved for tagging objects.
+## What's shared verbatim with mountos-admin-client
 
-**Platform: desktop only, not responsive.** A native macOS/Windows app window (Tauri), not a web page. `tauri.conf.json` enforces `minWidth: 860 / minHeight: 560` on the main window; there is no mobile or tablet target. The tray-popover window is a second, fixed-size native surface, not a breakpoint. Audit/critique responsive criteria against that: `@media (max-width: 860px)` exists only as edge-case tolerance at the window's exact floor (e.g. tiling window managers), not a mobile layout, and shouldn't be scored as if phone/tablet widths are in scope.
+- Every color, typography, spacing, and radius token (`src/app.css`'s `:root`/`.dark` blocks match admin-client's exactly).
+- Every `src/lib/components/ui/*` primitive: same files, same variants, same behavior, with one deliberate exception: `badge.svelte`'s `primary`/`success`/`warning` variants dropped their resting `bg-*/N` background tint (now `bg-transparent`, matching `destructive`'s already-correct pattern) — computed contrast showed all three failing 4.5:1 AA in light mode against their own tinted background (verified: 4.20/3.98/text stays passing for warning only because of headroom, primary and success measurably failed). If admin-client fixes this upstream, reconcile back to verbatim; until then this is the one component this repo has intentionally diverged from. Otherwise, don't fork these files locally — if a variant is missing, copy it over from admin-client rather than hand-rolling one here.
+- Dialogs: `bits-ui`'s `Dialog.Root`/`Content`/`Header`/`Footer`/`Title`, same as admin-client. mountos-gui no longer uses native `<dialog>` elements.
+- Toasts: `svelte-sonner` via the copied `Toaster` wrapper, same as admin-client — except the wrapper reads this app's own `src/lib/theme.svelte.ts` for light/dark instead of `mode-watcher` (mountos-gui already had its own theme system with cross-window sync via `localStorage`, predating this integration; adding a second theme library would have been redundant), and `src/lib/styles/toast.css` is a simplified adaptation of admin-client's own (same OKLCH type-color mapping via `[data-sonner-toast][data-type=...]`, without the clip-path chamfer applied elsewhere in this app). Never rely on `<Toaster richColors>`; that's sonner's own hardcoded palette, unrelated to this app's tokens.
+- **The full cyberpunk design system** (`src/lib/styles/corner-brackets.css`, copied verbatim from admin-client): gradient-painted `.corner-brackets` (hover/focus-within reactive), `.tech-grid`, and the `.cyberpunk-skewed`/`-sm`/`-lg` clip-path family. `.corner-brackets`/`.tech-grid` frame the one primary panel per view (Instances table, filter row, Profile editor) and the empty states, same "one bracketed surface per view" rule as admin-client. `.cyberpunk-skewed-sm` marks every primary CTA and every dialog footer's action pair (both buttons, matching admin-client's `ConfirmDialog`/`DeactivateVolumeDialog` convention — the clip applies to the footer-action-pair pattern regardless of the confirm button's semantic variant). `.th-cyber` marks table header cells (Instances, Gateway launches) for the scan-line-underline + corner-bracket-on-first/last-`th` treatment.
+- **`InfoTip.svelte`** (`src/lib/components/shared/InfoTip.svelte`, copied verbatim): the hover/focus tooltip (portal to `document.body`, viewport-aware positioning, Escape/scroll/resize dismissal per WCAG 1.4.13) used for every inline field hint. Replaces the earlier always-visible `<small>` + `Lightbulb` text dump.
 
-**Key Characteristics:**
-- Sharp geometry: `--radius` caps at 0.25rem; buttons are square. Corner-bracket frames, not soft cards.
-- OKLCH-only color, perceptually uniform across light and dark. No `#fff`, `#000`, `rgb()`, or `hsl()`.
-- Warm-rust primary (light) and gold primary (dark). Not blue, not teal.
-- Entity-coded pastels for object tagging (one hue per noun, paired `-text` value on tints).
-- The smallest UI text is 16px; body runs 17-18px.
-- Flat by default; no drop shadows on containers.
-- Dense data tables; no decorative whitespace.
+## App-specific leftovers (no admin-client equivalent)
 
-## 2. Colors
+These have no counterpart in admin-client because they solve a problem specific to a CLI-supervisor desktop app, not an infrastructure dashboard. Keep them; don't try to force-fit an admin-client pattern here instead.
 
-### Primary
-- **Rust Amber** (`oklch(0.54 0.14 39)`, light): interactive accent, focus ring (`--ring` `oklch(0.61 0.14 39)`), scrollbar thumb, primary buttons.
-- **Console Gold** (`oklch(0.78 0.13 92)`, dark): dark-mode primary and ring. Moderate chroma, no neon glare.
+- **`.command-preview` / `<CommandPreview>`** (`src/lib/components/CommandPreview.svelte`): a bordered, `--muted`-background box showing the exact `mountos` CLI invocation an action is about to run. Core interaction principle of this app — every mutating action shows its real command before (and often after) running it. Admin-client has nothing like this since it talks to an HTTP API, not a CLI.
+- **`<Callout>`** (`src/lib/components/Callout.svelte`): a warning-tinted inline banner (border + `--warning` text) for non-blocking errors and cautions inside forms and dialogs. A small app-specific component, not a copied admin-client one.
+- **`.led`**: 8px pulsing status dot for per-mount health (healthy/limited/lost), reused as-is from the original bespoke system. No admin-client equivalent (it has no concept of a live local mount).
+- **`.mono-label` / `.sr-only`**: kept verbatim from the original system; functionally identical to admin-client's own use of the same patterns (mono microlabels on command previews and bundle paths, screen-reader-only text).
+- **`src/lib/app-state.svelte.ts`**: a single shared runes-based state module holding all cross-cutting app state (profiles, running instances, settings, every dialog's fields) that `App.svelte` and its child views/dialogs import directly, instead of prop-drilling. mountos-admin-client is a SvelteKit app with route-level data loading and doesn't need this pattern; a plain Vite+Svelte app with one window and many sibling dialogs does.
 
-### Secondary
-No secondary accent by design. `--secondary` is a low-contrast neutral surface, not a brand color.
+## Do's and Don'ts (desktop-specific only — see admin-client's DESIGN.md for everything else)
 
-### Tertiary (entity-coded pastels)
-Pastels tag domain objects only (`--pastel-mount`, `--pastel-volume`, `--pastel-storage`, `--pastel-session`, `--pastel-node`, `--pastel-region`), each with a paired `-text` value for legible labels on tints. **Identifiers, not decoration.** A mount chip is always the 90-hue gold-green; don't reassign.
-
-### Neutral
-Warm cream background (light), deep teal-black (dark), card one step from background, 1px hairline borders, muted/label text on the tinted muted-foreground tokens.
-
-### Status
-Destructive red-orange, warning amber ("needs attention", not "FYI"), success green. Hues hold steady across themes.
-
-### Named Rules
-
-**The Rationed Color Rule.** Primary, destructive, warning, success, and entity pastels are the only saturated families on screen. If three rust-amber elements show at once, two are wrong.
-
-**The Entity Pastel Lock.** Pastel tokens bind to entity types one-to-one across every mountOS surface.
-
-**The OKLCH-Only Rule.** All colors authored in OKLCH. `#fff`, `#000`, `rgb()`, `hsl()` are forbidden in product code.
-
-## 3. Typography
-
-System sans stack with `cv02 cv03 cv04 cv11` OpenType features; mono is `ui-monospace, Menlo, monospace`.
-
-- **Display** 600 / 1.875rem / 1.2 / -0.02em: one per view (the topbar title).
-- **Headline** 600 / 1.5rem / 1.2 / -0.02em: card and section heads.
-- **Title** 600 / 1.25rem / 1.2 / -0.02em: subsection labels inside a panel.
-- **Body** 400 / 1.125rem / 1.6 / -0.01em: default prose.
-- **Body Small** 400 / 1.0625rem / 1.5: table cells, dense lists.
-- **Label** 500 / 1rem / 1.5: button text, form labels. 16px is the floor.
-- **Mono Microlabel** 400 / 1rem / 0.1em tracking, uppercase: table column headers and technical metadata labels only.
-
-### Named Rules
-
-**The 16px Floor Rule.** No UI text below 16px. No exceptions — the mono microlabel used to be carved out at 0.7rem (11.2px) and was raised to 1rem to close it. Its tracking dropped 0.2em → 0.1em at the same time: tracking is relative to size, so the value tuned for 11px would have made every label ~45% wider at 16px for no legibility gain.
-
-**The Mono-For-Microlabels-Only Rule.** Mono is reserved for table column headers, technical IDs, paths, and command previews. Forbidden in body copy, button labels, headings, and as decorative section eyebrows. One mono microlabel above a code/command block is technical metadata; a mono eyebrow above every section is banned scaffolding.
-
-## 4. Elevation
-
-Flat by default. Depth is a one-step background lift (background → card) plus 1px hairline borders.
-
-**The No-Drop-Shadow Rule.** Containers do not float. If a surface needs lift, change its tone, not its shadow.
-
-**The Glow-Is-State Rule.** Glow signals interaction (focus ring, LED status dots), never decoration. The `.led` pulse respects `prefers-reduced-motion`.
-
-## 5. Components
-
-All utilities live in `src/app.css`.
-
-### Buttons (`.btn`)
-- Square (`border-radius: 0`), 1px border, transparent fill; hover swaps to `--accent` background; active scales 0.98 with a 10% primary tint.
-- `.primary`: solid `--primary` with `--primary-foreground` text. `.destructive`: outline-only destructive border/text, 10% tint on hover; no filled destructive variant. `.ghost`: transparent border. `.icon-btn`: 36px square; every icon-only button carries an `aria-label`.
-- Heights: 36px default; interactive elements in dense tables keep at least 36px with honest hit areas.
-
-### Cards / Panels (`.surface`, `.panel`)
-- 1px hairline `--border`, `--card` background, 2px radius, no shadow. Cards do not nest; sub-regions use a divider or `--accent` tint.
-- `.corner-brackets` (two-corner variant, `--ring` tinted) frames THE primary content panel of a view. One bracketed surface per view maximum.
-
-### Inputs (`.input`, `.select`, `.textarea`)
-- `--input` background, 1px border, square, 36px height matching buttons. Focus is the global 2px `--ring` outline at 2px offset. Secrets are paste-first password fields and are never echoed.
-
-### Tables (`.table`)
-- Dense rows, 17px cells, 1px row separators. Column headers are the mono microlabel (0.7rem, 0.2em tracking, uppercase) on `--label-foreground`.
-
-### Status
-- `.badge` outline chips; `.badge.success|warning|destructive` tint border and text with the status color; `.badge.mount` uses the mount entity pastel.
-- `.led` 8px status dot with a 2.5s opacity pulse, disabled under reduced motion.
-
-### Dialogs
-- Native `<dialog>` only (focus trap, Escape, `aria-modal` for free). One purpose per dialog; reserved for flows that must interrupt (secret entry). Everything else is inline disclosure.
-
-### Sanctioned patterns (NOT "decorative gradients")
-- Corner-bracket marks, the LED pulse, and the brand mark's clip-path chamfer are structural signature, keep them.
-- `.btn.primary`'s clip-path chamfer (`polygon(0 12px, 12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%)`), a steeper variant of the brand mark's 8px cut, proportionate to the button's larger size. Every primary CTA carries it, not a one-off; consistent component vocabulary across the surface.
-- `.tech-grid`, the dual `linear-gradient` 20px grid backdrop on empty states. Brand backdrop, keep.
-- `.skeleton`, the opacity-pulse loading placeholder (no shimmer gradient); collapses under reduced motion.
-- Any NEW gradient, glow, or clip-path must earn an explicit entry here. Default-deny.
-
-## 6. Do's and Don'ts
-
-### Do:
-- **Do** author every color in OKLCH via the tokens; keep light and dark parity for every new token.
-- **Do** keep the page flat; separation via tone or hairline border.
-- **Do** use entity pastels consistently for the same noun across views.
-- **Do** keep body type at 17-18px, headings tightened to -0.02em.
-- **Do** show the exact CLI command in mono where the app runs one (command preview, fix commands).
-- **Do** respect `prefers-reduced-motion` globally.
-- **Do** give every icon-only control an `aria-label`, every view a keyboard path, and dialogs native focus semantics.
-
-### Don't:
-- **Don't** use rounded, bubbly, or playful aesthetics; radius caps at 0.25rem.
-- **Don't** add gradients, glassmorphism, decorative illustrations, or marketing hero sections.
-- **Don't** use `border-left`/`border-right` stripes thicker than 1px as accents.
-- **Don't** build hero-metric tiles (big number + small label grids). Put counts inline in panel heads; users want tables.
-- **Don't** put mono in headings, buttons, or as section eyebrows; microlabels belong to tables and technical metadata only.
-- **Don't** nest cards, and don't reach for a modal when inline disclosure works.
-- **Don't** drop UI text below 16px.
-- **Don't** use em dashes anywhere in product copy. Use commas, colons, semicolons, or periods.
-- **Don't** introduce a secondary brand color; rust → gold is the entire palette story.
+- **Do** keep every new dialog on `bits-ui`'s `Dialog.Root`, matching admin-client, not a hand-rolled native `<dialog>`.
+- **Do** show the exact CLI command (`<CommandPreview>`) for every action that shells out to `mountos`.
+- **Do** copy a missing `ui/*` component from `mountos-admin-client` rather than building a local one-off equivalent.
+- **Do** apply `cyberpunk-skewed-sm` to new primary CTAs and dialog footer action pairs, and `InfoTip` (not inline hint text) for field-level explanations.
 - **Don't** reference internal binary names in user-facing copy; the public name is `mountos` and the product is "mountOS Desktop".
+- **Don't** use em dashes anywhere in product copy (same rule as admin-client).

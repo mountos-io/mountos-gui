@@ -17,6 +17,7 @@ const managedFlags = new Set([
   'm',
   'mount',
   'mount-point',
+  'destination',
   'foreground',
   'f',
   'gateway',
@@ -41,9 +42,10 @@ const managedFlags = new Set([
 
 // gateway-* flags are deliberately excluded: validateExtraArgs rejects any
 // long flag starting with "gateway-" outright (see the `rawName.startsWith
-// ('gateway-')` check below), regardless of what's listed here, since
-// gateway profiles aren't supported yet (save_profile hard-rejects any kind
-// other than "mount"). Revisit once gateway profile support ships.
+// ('gateway-')` check below), regardless of what's listed here. Gateway
+// launches have their own dedicated fields and argv builder
+// (buildGatewayArgv/openGateway) rather than the extraArgs escape hatch, so
+// smuggling gateway-* through extraArgs stays rejected on a mount profile.
 const booleanLongFlags = new Set([
   'acl',
   'agent',
@@ -104,7 +106,11 @@ export function validateMountPathForBackend(backend: Backend, mountPath: string)
   }
   if (backend !== 'fskit') return null
   const trimmed = mountPath.replace(/\/+$/, '')
-  if (!trimmed.startsWith(FSKIT_MOUNT_PREFIX) || trimmed.length <= FSKIT_MOUNT_PREFIX.length) {
+  // Mirrors Rust's has_parent_component check: this is a byte-prefix test,
+  // not a resolved-path check, so a ".." segment must be rejected explicitly
+  // or "/Volumes/MountOS/x/../../../etc" would pass it.
+  const hasParentComponent = trimmed.split('/').some((segment) => segment === '..')
+  if (hasParentComponent || !trimmed.startsWith(FSKIT_MOUNT_PREFIX) || trimmed.length <= FSKIT_MOUNT_PREFIX.length) {
     return `FSKit requires a mount point under ${FSKIT_MOUNT_PREFIX}<name>`
   }
   return null
@@ -168,6 +174,165 @@ export function buildMountArgv(profile: MountProfile): string[] {
   if (backend) argv.push(...backend)
 
   argv.push(...profile.extraArgs)
+  return argv
+}
+
+// UI-only mirrors of src-tauri/src/lib.rs's satellite_volname/
+// build_snapshot_argv/build_deleted_argv/build_version_argv/build_fork_*_argv
+// — same hand-synced-duplicate caveat as buildMountArgv: these only drive the
+// live command preview shown in each dialog, Rust independently rebuilds and
+// re-validates everything from the on-disk profile before acting.
+function satelliteVolname(profile: MountProfile, kind: string): string {
+  return profile.volume ? `${profile.volume} (${kind})` : `mountOS ${kind}`
+}
+
+// CloudFilter must always emit its flag explicitly (Windows has no safe
+// no-flag default -- it hard-codes to mountosio with no capability probing),
+// unlike FileProvider on macOS, which is safe to omit thanks to a real
+// probed fallback chain. Mirrors src-tauri/src/lib.rs's push_view_backend_flag.
+function pushViewBackendFlag(argv: string[], backend: Backend): void {
+  if (backend !== 'cloudfilter' && !backendNeedsMountPath(backend)) return
+  const flags = backendArgv[backend]
+  if (flags) argv.push(...flags)
+}
+
+function buildSatellitePrefix(subcommand: string, profile: MountProfile, kind: string): string[] {
+  const argv = [subcommand]
+  if (profile.discoveryUrl) argv.push('--discovery-url', profile.discoveryUrl)
+  if (profile.fork) argv.push('--fork-name', profile.fork)
+  argv.push('--volname', satelliteVolname(profile, kind))
+  return argv
+}
+
+function pushSatelliteCredentials(argv: string[], profile: MountProfile): void {
+  if (profile.accessKeyId) argv.push('-a', profile.accessKeyId, '-s')
+}
+
+// The server resolves disk-cache-dir and applies extraArgs unconditionally
+// before branching on mount vs. deleted/version/snapshot vs. gateway-only,
+// so this is shared by buildMountArgv and every satellite/gateway builder --
+// otherwise the command preview would show a profile's cache dir and extra
+// flags for a regular mount but silently omit them for these other launches.
+function pushCacheAndExtraArgs(argv: string[], profile: MountProfile): void {
+  if (profile.cacheDir) argv.push('--disk-cache-dir', profile.cacheDir)
+  argv.push(...profile.extraArgs)
+}
+
+// snapshot has no --destination flag: -m is its only mount-point flag, and it
+// daemonizes normally (unlike deleted/version).
+export function buildSnapshotArgv(profile: MountProfile, destination: string, timestamp: string): string[] {
+  const argv = buildSatellitePrefix('snapshot', profile, 'snapshot')
+  argv.push('-m', destination)
+  // Fused form: a leading-minus relative timestamp ("-1d") risks pflag
+  // misparsing a separate `--timestamp -1d` token pair as another flag.
+  argv.push(`--timestamp=${timestamp.trim()}`)
+  pushSatelliteCredentials(argv, profile)
+  pushCacheAndExtraArgs(argv, profile)
+  pushViewBackendFlag(argv, profile.backend)
+  return argv
+}
+
+export function buildDeletedArgv(
+  profile: MountProfile,
+  destination: string,
+  from?: string,
+  idleTimeout?: string,
+): string[] {
+  const argv = buildSatellitePrefix('deleted', profile, 'deleted')
+  argv.push('--destination', destination)
+  if (from?.trim()) argv.push(`--from=${from.trim()}`)
+  if (idleTimeout?.trim()) argv.push(`--idle-timeout=${idleTimeout.trim()}`)
+  pushSatelliteCredentials(argv, profile)
+  pushCacheAndExtraArgs(argv, profile)
+  pushViewBackendFlag(argv, profile.backend)
+  return argv
+}
+
+export function buildVersionArgv(
+  profile: MountProfile,
+  destination: string,
+  inode: string,
+  versionFormat?: string,
+  idleTimeout?: string,
+): string[] {
+  const argv = buildSatellitePrefix('version', profile, 'version')
+  argv.push('--destination', destination)
+  argv.push('-i', inode)
+  if (versionFormat?.trim() && versionFormat.trim() !== 'number') argv.push(`--version-format=${versionFormat.trim()}`)
+  if (idleTimeout?.trim()) argv.push(`--idle-timeout=${idleTimeout.trim()}`)
+  pushSatelliteCredentials(argv, profile)
+  pushCacheAndExtraArgs(argv, profile)
+  pushViewBackendFlag(argv, profile.backend)
+  return argv
+}
+
+// No --type flag is ever emitted (defaults to "general" server-side; iceberg
+// volumes have no profile representation in this GUI). No volume-identifying
+// flag is needed either — the access key alone scopes the volume.
+export function buildForkListArgv(profile: MountProfile): string[] {
+  const argv = ['fork', 'list']
+  if (profile.discoveryUrl) argv.push('--discovery-url', profile.discoveryUrl)
+  pushSatelliteCredentials(argv, profile)
+  return argv
+}
+
+export function buildForkCreateArgv(profile: MountProfile, name: string, parent?: string, asOf?: string): string[] {
+  const argv = ['fork', 'create', name]
+  if (profile.discoveryUrl) argv.push('--discovery-url', profile.discoveryUrl)
+  if (parent?.trim()) argv.push(`--parent=${parent.trim()}`)
+  if (asOf?.trim()) argv.push(`--as-of=${asOf.trim()}`)
+  pushSatelliteCredentials(argv, profile)
+  return argv
+}
+
+export function buildForkDeleteArgv(profile: MountProfile, name: string, force: boolean): string[] {
+  const argv = ['fork', 'delete', name]
+  if (profile.discoveryUrl) argv.push('--discovery-url', profile.discoveryUrl)
+  if (force) argv.push('--force')
+  pushSatelliteCredentials(argv, profile)
+  return argv
+}
+
+export function buildForkRestoreArgv(profile: MountProfile, name: string): string[] {
+  const argv = ['fork', 'restore', name]
+  if (profile.discoveryUrl) argv.push('--discovery-url', profile.discoveryUrl)
+  pushSatelliteCredentials(argv, profile)
+  return argv
+}
+
+export interface GatewayLaunchParams {
+  protocols: string[]
+  port?: string
+  gatewayOnly: boolean
+  noLoopback: boolean
+  certPath?: string
+  keyPath?: string
+}
+
+// gateway-only uses the standalone `gateway` subcommand (no -m, no backend
+// flag, no --volname -- confirmed against cmd_gateway.go/cmd_mount.go, -m is
+// optional whenever --gateway-only is set, there is no FUSE mount at all).
+// The mount+gateway combo instead reuses the full regular `buildMountArgv`
+// output with gateway flags appended, matching the CLI's real combo
+// invocation (`mount -m <dir> --gateway s3,hdfs`, no --gateway-only). Mirrors
+// src-tauri/src/lib.rs's build_gateway_argv.
+export function buildGatewayArgv(profile: MountProfile, params: GatewayLaunchParams): string[] {
+  let argv: string[]
+  if (params.gatewayOnly) {
+    argv = ['gateway']
+    if (profile.discoveryUrl) argv.push('--discovery-url', profile.discoveryUrl)
+    if (profile.fork) argv.push('--fork-name', profile.fork)
+    pushSatelliteCredentials(argv, profile)
+    pushCacheAndExtraArgs(argv, profile)
+  } else {
+    argv = buildMountArgv(profile)
+  }
+  if (params.protocols.length) argv.push('--gateway', params.protocols.join(','))
+  if (params.port?.trim()) argv.push('--gateway-port', params.port.trim())
+  if (params.noLoopback) argv.push('--gateway-no-loopback')
+  if (params.certPath?.trim() && params.keyPath?.trim()) {
+    argv.push('--gateway-cert', params.certPath.trim(), '--gateway-key', params.keyPath.trim())
+  }
   return argv
 }
 

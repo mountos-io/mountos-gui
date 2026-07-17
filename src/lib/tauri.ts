@@ -1,9 +1,12 @@
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
+import type { GatewayLaunchParams } from './cli'
 import type {
   DesktopSettings,
   DiagnosticsBundle,
   ExportedProfile,
+  Fork,
+  GatewayLaunchResult,
   MountProfile,
   MountResult,
   SecretStatus,
@@ -93,7 +96,7 @@ export async function exportProfile(profileId: string): Promise<ExportedProfile>
 }
 
 export async function getSettings(): Promise<DesktopSettings> {
-  if (!hasDesktopBridge()) return { defaultBackend: 'auto' }
+  if (!hasDesktopBridge()) return { defaultBackend: 'auto', advancedOpsEnabled: false }
   return invoke<DesktopSettings>('get_settings')
 }
 
@@ -120,6 +123,88 @@ export async function getProfileSecretStatus(profileId: string): Promise<SecretS
 export async function mountProfile(profileId: string, secret?: string): Promise<MountResult> {
   if (!hasDesktopBridge()) throw new Error('Desktop bridge unavailable')
   return invoke<MountResult>('mount_profile', { profileId, secret })
+}
+
+export async function forkList(profileId: string, secret?: string): Promise<Fork[]> {
+  if (!hasDesktopBridge()) throw new Error('Desktop bridge unavailable')
+  const raw = await invoke<string>('fork_list_raw', { profileId, secret })
+  if (!raw.trim()) return []
+  return JSON.parse(raw) as Fork[]
+}
+
+export async function forkCreate(
+  profileId: string,
+  name: string,
+  parent?: string,
+  asOf?: string,
+  secret?: string,
+): Promise<string> {
+  if (!hasDesktopBridge()) throw new Error('Desktop bridge unavailable')
+  return invoke<string>('fork_create', { profileId, name, parent, asOf, secret })
+}
+
+export async function forkDelete(profileId: string, name: string, force: boolean, secret?: string): Promise<string> {
+  if (!hasDesktopBridge()) throw new Error('Desktop bridge unavailable')
+  return invoke<string>('fork_delete', { profileId, name, force, secret })
+}
+
+export async function forkRestore(profileId: string, name: string, secret?: string): Promise<string> {
+  if (!hasDesktopBridge()) throw new Error('Desktop bridge unavailable')
+  return invoke<string>('fork_restore', { profileId, name, secret })
+}
+
+export async function openSnapshotView(
+  profileId: string,
+  destination: string,
+  timestamp: string,
+  secret?: string,
+): Promise<MountResult> {
+  if (!hasDesktopBridge()) throw new Error('Desktop bridge unavailable')
+  return invoke<MountResult>('open_snapshot_view', { profileId, destination, timestamp, secret })
+}
+
+export async function openDeletedView(
+  profileId: string,
+  destination: string,
+  from?: string,
+  idleTimeout?: string,
+  secret?: string,
+): Promise<MountResult> {
+  if (!hasDesktopBridge()) throw new Error('Desktop bridge unavailable')
+  return invoke<MountResult>('open_deleted_view', { profileId, destination, from, idleTimeout, secret })
+}
+
+export async function openVersionView(
+  profileId: string,
+  destination: string,
+  inode: string,
+  versionFormat?: string,
+  idleTimeout?: string,
+  secret?: string,
+): Promise<MountResult> {
+  if (!hasDesktopBridge()) throw new Error('Desktop bridge unavailable')
+  return invoke<MountResult>('open_version_view', {
+    profileId,
+    destination,
+    inode,
+    versionFormat,
+    idleTimeout,
+    secret,
+  })
+}
+
+export async function openGateway(
+  profileId: string,
+  params: GatewayLaunchParams,
+  secret?: string,
+): Promise<GatewayLaunchResult> {
+  if (!hasDesktopBridge()) throw new Error('Desktop bridge unavailable')
+  return invoke<GatewayLaunchResult>('open_gateway', { profileId, params, secret })
+}
+
+export async function stopGateway(pid: number): Promise<void> {
+  if (!hasDesktopBridge()) throw new Error('Desktop bridge unavailable')
+  await invoke('stop_gateway', { pid })
 }
 
 export async function unmountTarget(target: string): Promise<UnmountResult> {

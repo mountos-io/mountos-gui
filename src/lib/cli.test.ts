@@ -1,5 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import { backendNeedsMountPath, buildMountArgv, classifyMountError, isAbsolutePath, isValidFolderName, parseArgvInput, validateExtraArgs, validateMountPathForBackend } from './cli'
+import {
+  backendNeedsMountPath,
+  buildDeletedArgv,
+  buildForkCreateArgv,
+  buildForkDeleteArgv,
+  buildForkListArgv,
+  buildForkRestoreArgv,
+  buildMountArgv,
+  buildSnapshotArgv,
+  buildVersionArgv,
+  classifyMountError,
+  isAbsolutePath,
+  isValidFolderName,
+  parseArgvInput,
+  validateExtraArgs,
+  validateMountPathForBackend,
+} from './cli'
 import type { MountProfile } from './types'
 
 const profile: MountProfile = {
@@ -73,6 +89,10 @@ describe('cli helpers', () => {
     expect(validateExtraArgs(['--disk-cache-size', '10G', '--debug'])).toEqual([])
   })
 
+  it('rejects --destination as a managed flag, matching --mount', () => {
+    expect(validateExtraArgs(['--destination', '/tmp/other'])).toEqual(['--destination', '/tmp/other'])
+  })
+
   it('reports FileProvider and CloudFilter as not needing a mount path', () => {
     expect(backendNeedsMountPath('fileprovider')).toBe(false)
     expect(backendNeedsMountPath('cloudfilter')).toBe(false)
@@ -87,6 +107,11 @@ describe('cli helpers', () => {
     expect(validateMountPathForBackend('fskit', '/Volumes/MountOS')).not.toBeNull()
     expect(validateMountPathForBackend('fskit', '/tmp/Team')).not.toBeNull()
     expect(validateMountPathForBackend('fskit', '')).not.toBeNull()
+    // A ".." component must not lexically escape the jail even though the
+    // path doesn't exist yet and the prefix bytes match.
+    expect(
+      validateMountPathForBackend('fskit', '/Volumes/MountOS/x/../../../../../etc/cron.d/evil'),
+    ).not.toBeNull()
     expect(validateMountPathForBackend('nfs', '/tmp/anything')).toBeNull()
     expect(validateMountPathForBackend('nfs', '')).toBeNull()
   })
@@ -141,6 +166,67 @@ describe('cli helpers', () => {
     expect(classifyMountError('authentication failed - invalid access key or secret')).toBe('auth')
     expect(classifyMountError('mount point /x is not empty')).toBe('mountpoint')
     expect(classifyMountError('did not become ready within 30s')).toBe('indeterminate')
+  })
+
+  it('builds snapshot argv with -m and a fused timestamp flag', () => {
+    const argv = buildSnapshotArgv(profile, '/tmp/snap-view', '-1d')
+    expect(argv).toContain('snapshot')
+    expect(argv).toEqual(expect.arrayContaining(['-m', '/tmp/snap-view']))
+    expect(argv).toContain('--timestamp=-1d')
+    expect(argv).not.toContain('--destination')
+  })
+
+  it('builds deleted argv with --destination and omits optional flags when blank', () => {
+    const bare = buildDeletedArgv(profile, '/tmp/deleted-view')
+    expect(bare).toEqual(expect.arrayContaining(['--destination', '/tmp/deleted-view']))
+    expect(bare).not.toContain('-m')
+    expect(bare.some((arg) => arg.startsWith('--from'))).toBe(false)
+
+    const full = buildDeletedArgv(profile, '/tmp/deleted-view', '30d', '1h')
+    expect(full).toContain('--from=30d')
+    expect(full).toContain('--idle-timeout=1h')
+
+    // Go's DurationVar doesn't trim, so whitespace must be stripped here.
+    const padded = buildDeletedArgv(profile, '/tmp/deleted-view', '  30d  ', '  1h  ')
+    expect(padded).toContain('--from=30d')
+    expect(padded).toContain('--idle-timeout=1h')
+  })
+
+  it('builds version argv with --destination, -i, and omits the default format', () => {
+    const argv = buildVersionArgv(profile, '/tmp/version-view', '9007199254740993')
+    expect(argv).toEqual(expect.arrayContaining(['-i', '9007199254740993']))
+    expect(argv.some((arg) => arg.startsWith('--version-format'))).toBe(false)
+
+    const dated = buildVersionArgv(profile, '/tmp/version-view', '1', 'date', '5m')
+    expect(dated).toContain('--version-format=date')
+    expect(dated).toContain('--idle-timeout=5m')
+
+    // cmd_version.go checks `format != "number" && format != "date"` with no
+    // trimming, so a padded value must be trimmed here to pass that check.
+    const padded = buildVersionArgv(profile, '/tmp/version-view', '1', '  date  ', '  5m  ')
+    expect(padded).toContain('--version-format=date')
+    expect(padded).toContain('--idle-timeout=5m')
+  })
+
+  it('never emits --type or a volume flag for fork commands', () => {
+    const list = buildForkListArgv(profile)
+    const create = buildForkCreateArgv(profile, 'child', 'main', '1d')
+    const del = buildForkDeleteArgv(profile, 'child', true)
+    const restore = buildForkRestoreArgv(profile, 'child')
+    for (const argv of [list, create, del, restore]) {
+      expect(argv.some((arg) => arg.startsWith('--type'))).toBe(false)
+      expect(argv).not.toContain('--volname')
+      expect(argv).not.toContain('-m')
+    }
+    expect(create).toContain('--parent=main')
+    expect(create).toContain('--as-of=1d')
+    expect(del).toContain('--force')
+
+    // time.Parse/time.ParseInLocation don't trim, so whitespace must be
+    // stripped before it reaches argv.
+    const padded = buildForkCreateArgv(profile, 'child', '  main  ', '  1d  ')
+    expect(padded).toContain('--parent=main')
+    expect(padded).toContain('--as-of=1d')
   })
 
   it('validates folder names', () => {
