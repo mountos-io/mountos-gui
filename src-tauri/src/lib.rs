@@ -90,6 +90,11 @@ struct MountInstance {
     name: String,
     mount_path: String,
     fs_name: Option<String>,
+    // The transport the mount actually runs on (macfuse/fskit/nfs/smb/
+    // fileprovider/mountosio/cloudfilter), as reported by `mountos list`.
+    // fs_name is the device string ("mountos:<volume>") and says nothing about
+    // the backend, so it is not a stand-in for this.
+    backend: Option<String>,
     view_mode: Option<String>,
     project_volume_id: Option<String>,
     volume_id: Option<u32>,
@@ -124,6 +129,17 @@ struct SystemState {
     // (empty when there's exactly one, the common case). Surfaces ambiguity
     // instead of silently trusting whichever which() happened to resolve.
     cli_path_alternates: Vec<String>,
+    // Terminal emulators detected on this machine, in preference order. The
+    // settings picker lists exactly these, so it can only ever offer a
+    // terminal that is actually installed.
+    terminals: Vec<TerminalOption>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TerminalOption {
+    id: String,
+    label: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -182,6 +198,11 @@ struct ExportedProfile {
 #[serde(rename_all = "camelCase")]
 struct DesktopSettings {
     default_backend: Backend,
+    // Terminal emulator id for the dashboard launcher (see KNOWN_TERMINALS).
+    // None means the platform's stock terminal. A pinned terminal that is no
+    // longer installed silently falls back rather than failing: it is a
+    // preference, not a hard pin like cli_path_override.
+    terminal: Option<String>,
     // Seeds new profiles' discoveryUrl; each profile can still override it
     // independently afterward. Existing profiles are never retroactively
     // rewritten when this changes. Option<T> deserializes missing older
@@ -199,6 +220,7 @@ impl Default for DesktopSettings {
             default_backend: Backend::Auto,
             default_discovery_url: None,
             cli_path_override: None,
+            terminal: None,
         }
     }
 }
@@ -947,6 +969,10 @@ fn parse_instances_value(value: &Value) -> Vec<MountInstance> {
                     .to_string(),
                 mount_path,
                 fs_name,
+                backend: entry
+                    .get("backend")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string),
                 view_mode: entry
                     .get("viewMode")
                     .and_then(Value::as_str)
@@ -1269,6 +1295,7 @@ fn get_system_state_blocking(app: AppHandle) -> Result<SystemState, DesktopError
         issues,
         instances,
         cli_path_alternates,
+        terminals: available_terminals(),
     })
 }
 
@@ -1546,8 +1573,99 @@ fn applescript_quote(s: &str) -> String {
 // <target>`, left open afterward exactly like a terminal the user opened
 // themselves (Terminal.app's `do script` and `cmd /k` both do this
 // natively; the Linux fallback re-execs the shell to match).
+// The dashboard TUI refuses to render below 118x35 and shows a "Terminal too
+// small" placeholder instead, so every launcher below sizes its window up
+// front rather than inheriting the terminal's default.
+const TUI_COLS: &str = "140";
+const TUI_ROWS: &str = "42";
+
+// Terminals the launcher supports, in the order `auto` falls back through. The
+// platform's stock terminal is first: it is always installed and is the path
+// that has always shipped, so an unset or unavailable preference behaves
+// exactly as before.
+//
+// Membership is by verified launch, not popularity. Each entry was confirmed to
+// actually run a command in a new window at the size above. Warp is absent for
+// that reason: it launches, but silently ignores a command passed to it, which
+// would look like a working dashboard button that opens an empty terminal.
+// kitty and WezTerm are absent only because they were not available to verify.
 #[cfg(target_os = "macos")]
-fn spawn_dashboard_terminal(mountos: &Path, target: &str, gui: bool) -> Result<(), DesktopError> {
+const KNOWN_TERMINALS: &[(&str, &str, &str)] = &[
+    // (id, label, .app bundle name)
+    ("terminal", "Terminal", "Terminal"),
+    ("iterm2", "iTerm2", "iTerm"),
+    ("ghostty", "Ghostty", "Ghostty"),
+    ("alacritty", "Alacritty", "Alacritty"),
+    ("kitty", "kitty", "kitty"),
+    ("wezterm", "WezTerm", "WezTerm"),
+];
+
+#[cfg(target_os = "macos")]
+fn terminal_bundle_path(bundle: &str) -> Option<PathBuf> {
+    let mut roots = vec![
+        PathBuf::from("/Applications"),
+        PathBuf::from("/System/Applications/Utilities"),
+    ];
+    if let Ok(home) = std::env::var("HOME") {
+        roots.push(PathBuf::from(home).join("Applications"));
+    }
+    roots
+        .into_iter()
+        .map(|root| root.join(format!("{bundle}.app")))
+        .find(|path| path.exists())
+}
+
+#[cfg(target_os = "macos")]
+fn available_terminals() -> Vec<TerminalOption> {
+    KNOWN_TERMINALS
+        .iter()
+        .filter(|(_, _, bundle)| terminal_bundle_path(bundle).is_some())
+        .map(|(id, label, _)| TerminalOption {
+            id: (*id).to_string(),
+            label: (*label).to_string(),
+        })
+        .collect()
+}
+
+// Ghostty and Alacritty are launched through `open -na`, not their in-bundle
+// binary: Ghostty's own CLI refuses to start the emulator on macOS ("launching
+// the terminal emulator from the CLI is not supported ... use open -na
+// Ghostty.app") and the same form works for Alacritty, so both take one path.
+#[cfg(target_os = "macos")]
+fn open_app_with_args(bundle: &str, args: &[&str]) -> Result<(), DesktopError> {
+    let mut command = Command::new("open");
+    command.arg("-na").arg(bundle).arg("--args").args(args);
+    let output = command.output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(DesktopError::Message(if stderr.is_empty() {
+            format!("open -na {bundle} exited with {}", output.status)
+        } else {
+            stderr
+        }));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn spawn_iterm2(shell_cmd: &str) -> Result<(), DesktopError> {
+    // `write text` into a freshly created window, which is iTerm2's own
+    // scripting idiom; unlike Terminal.app it has no cold-launch window race,
+    // since `create window with default profile` returns the window itself.
+    let script = format!(
+        "tell application \"iTerm\"\n  activate\n  set newWindow to (create window with default profile)\n  tell current session of newWindow\n    set columns to {TUI_COLS}\n    set rows to {TUI_ROWS}\n    write text {}\n  end tell\nend tell",
+        applescript_quote(shell_cmd)
+    );
+    run_osascript(script, "iTerm")
+}
+
+#[cfg(target_os = "macos")]
+fn spawn_dashboard_terminal(
+    mountos: &Path,
+    target: &str,
+    gui: bool,
+    preferred: Option<&str>,
+) -> Result<(), DesktopError> {
     let mut shell_cmd = shell_quote(&mountos.display().to_string());
     shell_cmd.push_str(" dashboard");
     if gui {
@@ -1555,6 +1673,83 @@ fn spawn_dashboard_terminal(mountos: &Path, target: &str, gui: bool) -> Result<(
     }
     shell_cmd.push(' ');
     shell_cmd.push_str(&shell_quote(target));
+
+    // A preference for a terminal that has since been uninstalled falls back to
+    // the stock one rather than failing: the user asked to see a dashboard, not
+    // to see it in one specific app.
+    let available = available_terminals();
+    let chosen = preferred
+        .filter(|id| available.iter().any(|option| option.id == *id))
+        .unwrap_or("terminal");
+
+    match chosen {
+        "iterm2" => return spawn_iterm2(&shell_cmd),
+        "ghostty" => {
+            return open_app_with_args(
+                "Ghostty",
+                &[
+                    &format!("--window-width={TUI_COLS}"),
+                    &format!("--window-height={TUI_ROWS}"),
+                    "-e",
+                    "/bin/sh",
+                    "-c",
+                    &shell_cmd,
+                ],
+            )
+        }
+        "alacritty" => {
+            return open_app_with_args(
+                "Alacritty",
+                &[
+                    "-o",
+                    &format!("window.dimensions.columns={TUI_COLS}"),
+                    "-o",
+                    &format!("window.dimensions.lines={TUI_ROWS}"),
+                    "-e",
+                    "/bin/sh",
+                    "-c",
+                    &shell_cmd,
+                ],
+            )
+        }
+        // kitty takes the command as trailing args, with no -e separator, and
+        // sizes in cells via the `c` suffix.
+        "kitty" => {
+            return open_app_with_args(
+                "kitty",
+                &[
+                    "-o",
+                    &format!("initial_window_width={TUI_COLS}c"),
+                    "-o",
+                    &format!("initial_window_height={TUI_ROWS}c"),
+                    "/bin/sh",
+                    "-c",
+                    &shell_cmd,
+                ],
+            )
+        }
+        // WezTerm is the one that does NOT go through `open -na`: passed that
+        // way it launches but silently drops the command. Its in-bundle CLI
+        // works, and --config is a global flag that must precede `start` --
+        // after it, wezterm rejects it outright.
+        "wezterm" => {
+            let bundle = terminal_bundle_path("WezTerm")
+                .ok_or_else(|| DesktopError::Message("WezTerm.app not found".to_string()))?;
+            Command::new(bundle.join("Contents/MacOS/wezterm"))
+                .arg("--config")
+                .arg(format!("initial_cols={TUI_COLS}"))
+                .arg("--config")
+                .arg(format!("initial_rows={TUI_ROWS}"))
+                .arg("start")
+                .arg("--")
+                .arg("/bin/sh")
+                .arg("-c")
+                .arg(&shell_cmd)
+                .spawn()?;
+            return Ok(());
+        }
+        _ => {}
+    }
 
     // Two `do script` calls, not one: sending the real command to a cold-launched
     // Terminal (no windows yet) can race the new window's shell coming up and the
@@ -1565,24 +1760,29 @@ fn spawn_dashboard_terminal(mountos: &Path, target: &str, gui: bool) -> Result<(
     // than the dashboard TUI's own minimum (118x35), which otherwise replaces the
     // dashboard with a "Terminal too small" placeholder instead of rendering it.
     let script = format!(
-        "tell application \"Terminal\"\n  activate\n  if (count of windows) = 0 then\n    do script \"\"\n  end if\n  set number of columns of front window to 140\n  set number of rows of front window to 42\n  do script {} in front window\nend tell",
+        "tell application \"Terminal\"\n  activate\n  if (count of windows) = 0 then\n    do script \"\"\n  end if\n  set number of columns of front window to {TUI_COLS}\n  set number of rows of front window to {TUI_ROWS}\n  do script {} in front window\nend tell",
         applescript_quote(&shell_cmd)
     );
-    // .output(), not .spawn(): `do script` is a synchronous AppleEvent that
-    // returns once Terminal has started the command (not once the command
-    // finishes), so this doesn't block on the dashboard session itself —
-    // but it DOES need to be awaited to catch a real failure, most notably
-    // "AppleEvent timed out" (-1712) when this app hasn't been granted
-    // Automation permission for Terminal yet (System Settings > Privacy &
-    // Security > Automation). A bare .spawn() would silently report success
-    // even when osascript itself failed.
+    run_osascript(script, "Terminal")
+}
+
+// .output(), not .spawn(): the scripting calls here are synchronous AppleEvents
+// that return once the terminal has started the command (not once it finishes),
+// so this doesn't block on the dashboard session itself — but it DOES need to be
+// awaited to catch a real failure, most notably "AppleEvent timed out" (-1712)
+// when this app hasn't been granted Automation permission for that terminal yet
+// (System Settings > Privacy & Security > Automation). A bare .spawn() would
+// silently report success even when osascript itself failed.
+#[cfg(target_os = "macos")]
+fn run_osascript(script: String, app: &str) -> Result<(), DesktopError> {
     let output = Command::new("osascript").arg("-e").arg(script).output()?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(DesktopError::Message(if stderr.contains("-1712") {
-            "macOS blocked mountOS Desktop from controlling Terminal. Grant it in System \
-             Settings \u{2192} Privacy & Security \u{2192} Automation, then try again."
-                .to_string()
+            format!(
+                "macOS blocked mountOS Desktop from controlling {app}. Grant it in System \
+                 Settings \u{2192} Privacy & Security \u{2192} Automation, then try again."
+            )
         } else if stderr.is_empty() {
             format!("osascript exited with {}", output.status)
         } else {
@@ -1592,38 +1792,108 @@ fn spawn_dashboard_terminal(mountos: &Path, target: &str, gui: bool) -> Result<(
     Ok(())
 }
 
+// Windows Terminal is the Win11 default host and cmd is guaranteed present.
+// Both are the forms this launcher already shipped with, i.e. the ones known to
+// work. Alacritty/WezTerm/PowerShell are deliberately absent rather than added
+// from documentation alone -- there was no Windows host here to verify them on,
+// and an unverified entry in this list is a dashboard button that opens the
+// wrong thing or nothing.
 #[cfg(windows)]
-fn spawn_dashboard_terminal(mountos: &Path, target: &str, gui: bool) -> Result<(), DesktopError> {
-    let mut shell_cmd = format!("mode con: cols=140 lines=42 && \"{}\" dashboard", mountos.display());
+const KNOWN_TERMINALS: &[(&str, &str, &str)] = &[
+    // (id, label, binary to probe on PATH)
+    ("wt", "Windows Terminal", "wt"),
+    ("cmd", "Command Prompt", "cmd"),
+];
+
+#[cfg(windows)]
+fn available_terminals() -> Vec<TerminalOption> {
+    KNOWN_TERMINALS
+        .iter()
+        // cmd is the guaranteed fallback: ComSpec always resolves, and probing
+        // PATH for it would be the one lookup that must never fail.
+        .filter(|(id, _, bin)| *id == "cmd" || which::which(bin).is_ok())
+        .map(|(id, label, _)| TerminalOption {
+            id: (*id).to_string(),
+            label: (*label).to_string(),
+        })
+        .collect()
+}
+
+#[cfg(windows)]
+fn spawn_dashboard_terminal(
+    mountos: &Path,
+    target: &str,
+    gui: bool,
+    preferred: Option<&str>,
+) -> Result<(), DesktopError> {
+    let mut shell_cmd = format!("mode con: cols={TUI_COLS} lines={TUI_ROWS} && \"{}\" dashboard", mountos.display());
     if gui {
         shell_cmd.push_str(" --gui");
     }
     shell_cmd.push_str(&format!(" \"{target}\""));
 
-    // Prefer Windows Terminal (the Win11 default host) when installed; cmd
-    // /k always works and, like Terminal.app's do script, keeps the window
-    // open after the command finishes. `mode con` resizes the console before
-    // the dashboard TUI starts — its own minimum size (118x35) is larger
-    // than cmd/wt's default new-window/new-tab size, which otherwise shows
-    // a "Terminal too small" placeholder instead of the dashboard (mirrors
-    // the same fix applied to Terminal.app on macOS).
-    if let Ok(wt) = which::which("wt") {
-        Command::new(wt)
-            .arg("--size")
-            .arg("140,42")
-            .arg("new-tab")
-            .arg("cmd")
-            .arg("/k")
-            .arg(&shell_cmd)
-            .spawn()?;
-    } else {
-        Command::new("cmd").arg("/k").arg(&shell_cmd).spawn()?;
+    // cmd /k keeps the window open after the command finishes, like
+    // Terminal.app's do script. `mode con` resizes the console before the
+    // dashboard TUI starts — its own minimum (118x35) is larger than cmd/wt's
+    // default new-window/new-tab size, which otherwise shows a "Terminal too
+    // small" placeholder instead of the dashboard (mirrors the macOS fix).
+    //
+    // An uninstalled preference falls back to cmd rather than failing: the user
+    // asked to see a dashboard, not to see it in one specific app.
+    let available = available_terminals();
+    let chosen = preferred
+        .filter(|id| available.iter().any(|option| option.id == *id))
+        .unwrap_or(if which::which("wt").is_ok() { "wt" } else { "cmd" });
+
+    if chosen == "wt" {
+        if let Ok(wt) = which::which("wt") {
+            Command::new(wt)
+                .arg("--size")
+                .arg(format!("{TUI_COLS},{TUI_ROWS}"))
+                .arg("new-tab")
+                .arg("cmd")
+                .arg("/k")
+                .arg(&shell_cmd)
+                .spawn()?;
+            return Ok(());
+        }
     }
+    Command::new("cmd").arg("/k").arg(&shell_cmd).spawn()?;
     Ok(())
 }
 
+// The chain this launcher already shipped with, now also pickable. Nothing new
+// was added from documentation alone: there was no Linux host here to verify a
+// launch on, and an unverified entry is a dashboard button that opens the wrong
+// thing or nothing.
 #[cfg(not(any(windows, target_os = "macos")))]
-fn spawn_dashboard_terminal(mountos: &Path, target: &str, gui: bool) -> Result<(), DesktopError> {
+const KNOWN_TERMINALS: &[(&str, &str, &str)] = &[
+    // (id, label, binary to probe on PATH)
+    ("x-terminal-emulator", "System default", "x-terminal-emulator"),
+    ("gnome-terminal", "GNOME Terminal", "gnome-terminal"),
+    ("konsole", "Konsole", "konsole"),
+    ("xterm", "xterm", "xterm"),
+];
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn available_terminals() -> Vec<TerminalOption> {
+    KNOWN_TERMINALS
+        .iter()
+        .filter(|(_, _, bin)| which::which(bin).is_ok())
+        .map(|(id, label, _)| TerminalOption {
+            id: (*id).to_string(),
+            label: (*label).to_string(),
+        })
+        .collect()
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn spawn_dashboard_terminal(
+    mountos: &Path,
+    target: &str,
+    gui: bool,
+    preferred: Option<&str>,
+) -> Result<(), DesktopError> {
     let mut shell_cmd = shell_quote(&mountos.display().to_string());
     shell_cmd.push_str(" dashboard");
     if gui {
@@ -1636,7 +1906,14 @@ fn spawn_dashboard_terminal(mountos: &Path, target: &str, gui: bool) -> Result<(
     // Terminal.app / cmd /k's native behavior.
     shell_cmd.push_str("; exec \"$SHELL\"");
 
-    for terminal in ["x-terminal-emulator", "gnome-terminal", "konsole", "xterm"] {
+    // Try the preference first, then fall through the chain: an uninstalled
+    // preference must not fail when another terminal is right there.
+    let ordered: Vec<&str> = preferred
+        .into_iter()
+        .chain(KNOWN_TERMINALS.iter().map(|(id, _, _)| *id))
+        .collect();
+
+    for terminal in ordered {
         if which::which(terminal).is_err() {
             continue;
         }
@@ -1655,7 +1932,7 @@ fn spawn_dashboard_terminal(mountos: &Path, target: &str, gui: bool) -> Result<(
     ))
 }
 
-fn launch_dashboard_blocking(target: String, gui: bool) -> Result<(), DesktopError> {
+fn launch_dashboard_blocking(app: AppHandle, target: String, gui: bool) -> Result<(), DesktopError> {
     if !is_openable_target(&target) {
         return Err(DesktopError::Message(
             "mount target is not an absolute filesystem path".to_string(),
@@ -1667,7 +1944,11 @@ fn launch_dashboard_blocking(target: String, gui: bool) -> Result<(), DesktopErr
                 .to_string(),
         ));
     }
-    spawn_dashboard_terminal(&mountos_path()?, &target, gui)
+    // A broken/missing settings.json must not block the dashboard; fall back to
+    // no preference (the stock terminal) rather than surfacing a settings error
+    // from a button that has nothing to do with settings.
+    let preferred = get_settings(app).ok().and_then(|settings| settings.terminal);
+    spawn_dashboard_terminal(&mountos_path()?, &target, gui, preferred.as_deref())
 }
 
 // async + spawn_blocking: on macOS a denied/pending Automation permission
@@ -1675,8 +1956,8 @@ fn launch_dashboard_blocking(target: String, gui: bool) -> Result<(), DesktopErr
 // timeout (~2 minutes) to fail, and this must not freeze the Tauri IPC
 // thread for that long.
 #[tauri::command]
-async fn launch_dashboard(target: String, gui: bool) -> Result<(), DesktopError> {
-    tauri::async_runtime::spawn_blocking(move || launch_dashboard_blocking(target, gui))
+async fn launch_dashboard(app: AppHandle, target: String, gui: bool) -> Result<(), DesktopError> {
+    tauri::async_runtime::spawn_blocking(move || launch_dashboard_blocking(app, target, gui))
         .await
         .map_err(|error| DesktopError::Message(format!("dashboard launch task failed: {error}")))?
 }
@@ -1691,6 +1972,25 @@ fn open_target(target: String) -> Result<(), DesktopError> {
     if !list_contains_target(&target)? {
         return Err(DesktopError::Message(
             "refusing to open a path that is not an active mount target".to_string(),
+        ));
+    }
+    open::that_detached(target)?;
+    Ok(())
+}
+
+// Opens a diagnostics bundle this app wrote.
+//
+// Mirrors open_target's guard: the path is confined to our own diagnostics
+// directory rather than opened because the frontend asked. Both sides are
+// canonicalized first, so a symlink or `..` inside the argument cannot escape
+// the directory and turn this into an arbitrary "open any file" primitive.
+#[tauri::command]
+fn open_diagnostics_bundle(app: AppHandle, path: String) -> Result<(), DesktopError> {
+    let dir = app.path().app_cache_dir()?.join("diagnostics").canonicalize()?;
+    let target = PathBuf::from(&path).canonicalize()?;
+    if !target.starts_with(&dir) {
+        return Err(DesktopError::Message(
+            "refusing to open a path outside the diagnostics directory".to_string(),
         ));
     }
     open::that_detached(target)?;
@@ -1938,6 +2238,7 @@ pub fn run() {
             get_instance_config,
             launch_dashboard,
             create_diagnostics_bundle,
+            open_diagnostics_bundle,
             mcp_status,
             mcp_install,
             mcp_uninstall,

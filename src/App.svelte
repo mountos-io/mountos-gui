@@ -2,7 +2,6 @@
   import {
     AlertTriangle,
     Bot,
-    CheckCircle2,
     ChevronDown,
     ChevronRight,
     Copy,
@@ -53,6 +52,7 @@
     mcpUninstall,
     mountHelp,
     mountProfile,
+    openDiagnosticsBundle,
     openTarget,
     saveProfile,
     saveSettings,
@@ -60,9 +60,9 @@
     unmountTarget,
     unmountAllTargets,
   } from './lib/tauri'
-  import type { Backend, DesktopSettings, DiagnosticsBundle, DiagnosticsCommandOutput, MountInstance, MountProfile, SystemState } from './lib/types'
+  import type { Backend, DesktopSettings, DiagnosticsBundle, MountInstance, MountProfile, SystemState } from './lib/types'
 
-  type View = 'instances' | 'profiles' | 'health' | 'settings'
+  type View = 'instances' | 'profiles' | 'settings'
 
   // mountOS access key IDs are fixed-length; this only checks length (not
   // charset) since that's the one constraint the GUI can enforce cheaply.
@@ -71,12 +71,13 @@
   let view = $state<View>('instances')
   let loaded = $state(false)
   let profiles = $state<MountProfile[]>([])
-  let systemState = $state<SystemState>({ platform: 'macos', checkOk: false, issues: [], instances: [], cliPathAlternates: [] })
+  let systemState = $state<SystemState>({ platform: 'macos', checkOk: false, issues: [], instances: [], cliPathAlternates: [], terminals: [] })
   let selectedProfileId = $state<string | null>(null)
   let query = $state('')
   let busy = $state(false)
   let message = $state('')
-  let messageKind = $state<'info' | 'error'>('info')
+  let messageKind = $state<'info' | 'warn' | 'error'>('info')
+  let messageTimer: ReturnType<typeof setTimeout> | undefined
   let commandText = $state('')
   let rejectedArgs = $state<string[]>([])
   let extraArgsInput = $state('')
@@ -112,9 +113,25 @@
   )
   const limitedCount = $derived(systemState.instances.filter((instance) => instance.health === 'limited').length)
 
-  function notify(text: string, kind: 'info' | 'error' = 'info') {
+  // Errors stay until dismissed: they report something the user asked for that
+  // did not happen, so they need a decision. Info and warnings are transient
+  // status about things that happened on their own, and clear themselves.
+  const NOTICE_AUTO_DISMISS_MS = 6000
+
+  function notify(text: string, kind: 'info' | 'warn' | 'error' = 'info') {
     message = text
     messageKind = kind
+    clearTimeout(messageTimer)
+    messageTimer = undefined
+    if (kind !== 'error') {
+      messageTimer = setTimeout(() => { message = '' }, NOTICE_AUTO_DISMISS_MS)
+    }
+  }
+
+  function dismissNotice() {
+    clearTimeout(messageTimer)
+    messageTimer = undefined
+    message = ''
   }
 
   function describeError(error: unknown) {
@@ -127,7 +144,10 @@
     for (const [key, label] of knownInstances) {
       if (nextInstances.has(key)) continue
       if (expectedGone.delete(key)) continue
-      notify(`Mount disappeared: ${label}`, 'error')
+      // Not an error: expectedGone already absorbed the unmounts this app did,
+      // so reaching here means the mount went away on its own (CLI unmount,
+      // daemon exit). Worth saying once, not worth an alert that sticks.
+      notify(`Mount disappeared: ${label}`, 'warn')
     }
     knownInstances = nextInstances
   }
@@ -430,6 +450,15 @@
     }
   }
 
+  async function openBundle() {
+    if (!diagnosticsBundle) return
+    try {
+      await openDiagnosticsBundle(diagnosticsBundle.path)
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Could not open the bundle', 'error')
+    }
+  }
+
   async function runUnmount(instance: MountInstance) {
     busy = true
     expectedGone.add(instance.key)
@@ -529,6 +558,17 @@
     }
   }
 
+  async function copyConfig(key: string) {
+    const text = expandedConfig[key]
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+      notify('Mount flags copied')
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Copy failed', 'error')
+    }
+  }
+
   async function openDashboard(instance: MountInstance, gui: boolean) {
     try {
       await launchDashboard(instance.mountPath, gui)
@@ -556,7 +596,6 @@
   const navItems: Array<{ id: View; label: string; icon: typeof MonitorDot }> = [
     { id: 'instances', label: 'Instances', icon: MonitorDot },
     { id: 'profiles', label: 'Profiles', icon: HardDrive },
-    { id: 'health', label: 'Health', icon: ShieldCheck },
     { id: 'settings', label: 'Settings', icon: Settings },
   ]
 
@@ -652,6 +691,18 @@
     }
   }
 
+  async function changeTerminal(terminal: string) {
+    try {
+      // Empty string is the "System default" option: store it as undefined so
+      // settings.json carries no stale id once the choice is cleared.
+      settings = await saveSettings({ ...settings, terminal: terminal || undefined })
+      const label = systemState.terminals.find((option) => option.id === terminal)?.label
+      notify(label ? `Dashboards open in ${label}` : 'Dashboards open in the system default terminal')
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Failed to save settings', 'error')
+    }
+  }
+
   async function changeDefaultDiscoveryUrl(discoveryUrl: string) {
     const trimmed = discoveryUrl.trim()
     try {
@@ -730,7 +781,7 @@
   })
 
   function viewTitle(nextView: View) {
-    return nextView === 'instances' ? 'Instances' : nextView === 'profiles' ? 'Profiles' : nextView === 'health' ? 'Health' : 'Settings'
+    return nextView === 'instances' ? 'Instances' : nextView === 'profiles' ? 'Profiles' : 'Settings'
   }
 </script>
 
@@ -792,16 +843,22 @@
       </div>
     </header>
 
-    <div class="main-content">
+    <!-- The notice floats over .main-content rather than sitting in its flow:
+         in flow it reflowed everything below it on appear/dismiss, so a click
+         aimed at a button landed on whatever slid under the cursor when the
+         message auto-cleared. .main-area is the positioning context so it
+         stays clear of the sidebar and the sticky topbar. -->
+    <div class="main-area">
     {#if message}
-      <div class="notice" class:error={messageKind === 'error'} role={messageKind === 'error' ? 'alert' : 'status'}>
+      <div class="notice" class:error={messageKind === 'error'} class:warn={messageKind === 'warn'} role={messageKind === 'error' ? 'alert' : 'status'}>
         <span>{message}</span>
-        <button class="btn ghost icon-btn notice-dismiss" type="button" aria-label="Dismiss message" onclick={() => (message = '')}>
+        <button class="btn ghost icon-btn notice-dismiss" type="button" aria-label="Dismiss message" onclick={dismissNotice}>
           <X size={15} aria-hidden="true" />
         </button>
       </div>
     {/if}
 
+    <div class="main-content">
     {#if view === 'instances'}
       <section class="surface corner-brackets panel">
         <div class="panel-head">
@@ -852,7 +909,7 @@
                     {#if instance.external}<span class="badge">External</span>{/if}
                   </td>
                   <td><code>{instance.mountPath}</code></td>
-                  <td><span class="badge mount">{instance.fsName ?? 'unknown'}</span></td>
+                  <td><span class="badge mount">{instance.backend ?? 'unknown'}</span></td>
                   <td>{@render HealthBadge(instance.health)}</td>
                   <td>
                     <div class="row-actions">
@@ -902,7 +959,18 @@
                   <tr class="config-row">
                     <td colspan="5">
                       <div class="command-preview">
-                        <p class="mono-label">MOUNT FLAGS (.mountOS/.config)</p>
+                        <div class="preview-head">
+                          <p class="mono-label">MOUNT FLAGS (.mountOS/.config)</p>
+                          <button
+                            class="btn icon-btn"
+                            type="button"
+                            title="Copy mount flags"
+                            aria-label="Copy mount flags"
+                            onclick={() => copyConfig(instance.key)}
+                          >
+                            <Copy size={16} aria-hidden="true" />
+                          </button>
+                        </div>
                         <pre><code>{expandedConfig[instance.key]}</code></pre>
                       </div>
                     </td>
@@ -1120,88 +1188,6 @@
           </div>
         {/if}
       </section>
-    {:else if view === 'health'}
-      <section class="surface corner-brackets panel">
-        <div class="panel-head">
-          <h3>Backend readiness</h3>
-          <div class="row-actions">
-            <button class="btn" type="button" onclick={() => refresh()} disabled={busy} title="Re-run mountos check --json">
-              <RefreshCw size={16} aria-hidden="true" />
-              Run check
-            </button>
-            <button class="btn" type="button" onclick={createBundle} disabled={busy}>
-              <FileArchive size={16} aria-hidden="true" />
-              Bundle
-            </button>
-            <span class="badge {systemState.checkOk ? 'success' : 'warning'}">{systemState.checkOk ? 'Ready' : 'Needs attention'}</span>
-          </div>
-        </div>
-        {#if diagnosticsBundle}
-          <div class="diagnostics-report">
-            <div class="command-preview diagnostics-path">
-              <p class="mono-label">LOCAL BUNDLE</p>
-              <code>{diagnosticsBundle.path}</code>
-            </div>
-            {#if diagnosticsBundle.content}
-              {@const content = diagnosticsBundle.content}
-              <div class="diagnostics-grid">
-                <div class="setting-row">
-                  <span class="mono-label">CLI PATH</span>
-                  <code>{content.cliPath ?? 'not found'}</code>
-                </div>
-                <div class="setting-row">
-                  <span class="mono-label">CLI VERSION</span>
-                  <code>{content.cliVersion ?? 'unavailable'}</code>
-                </div>
-              </div>
-              {@render DiagnosticsOutput('CHECK OUTPUT', content.check)}
-              {@render DiagnosticsOutput('LIST OUTPUT', content.list)}
-              {#if content.profiles.length}
-                <p class="mono-label">SAVED PROFILES ({content.profiles.length})</p>
-                <div class="table-wrap">
-                  <table class="table">
-                    <thead>
-                      <tr>
-                        <th scope="col">Name</th>
-                        <th scope="col">Backend</th>
-                        <th scope="col">Mount path</th>
-                        <th scope="col">Secret</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {#each content.profiles as profile (profile.id)}
-                        <tr>
-                          <td>{profile.name}</td>
-                          <td><span class="badge">{profile.backend}</span></td>
-                          <td><code>{profile.mountPath || '—'}</code></td>
-                          <td>{profile.secretRef}</td>
-                        </tr>
-                      {/each}
-                    </tbody>
-                  </table>
-                </div>
-              {/if}
-            {/if}
-          </div>
-        {/if}
-        <div class="issue-list">
-          {#each systemState.issues as issue}
-            <article class="issue">
-              <AlertTriangle size={18} class={issue.severity} aria-hidden="true" />
-              <div>
-                <strong>{issue.title}</strong>
-                {#if issue.detail}<p>{issue.detail}</p>{/if}
-                {#if issue.fixCommand}<code>{issue.fixCommand}</code>{/if}
-              </div>
-            </article>
-          {:else}
-            <article class="issue">
-              <CheckCircle2 size={18} aria-hidden="true" />
-              <div><strong>No reported issues</strong><p>The CLI check command did not return repair items.</p></div>
-            </article>
-          {/each}
-        </div>
-      </section>
     {:else}
       <section class="surface panel settings-panel">
         <h3>Desktop policies</h3>
@@ -1226,6 +1212,15 @@
           <span><strong>Default backend</strong>{@render Hint("Applied to new profiles. Auto follows the CLI's platform order.")}</span>
           <select class="select setting-select" value={settings.defaultBackend} onchange={(e) => changeDefaultBackend(e.currentTarget.value as Backend)}>
             {#each backends as backend}<option value={backend}>{backend}</option>{/each}
+          </select>
+        </label>
+        <label class="setting-row">
+          <span><strong>Terminal</strong>{@render Hint('Where the dashboard opens. Only terminals found on this machine are listed. If the one you pick is later uninstalled, the dashboard falls back to the system default instead of failing.')}</span>
+          <select class="select setting-select" value={settings.terminal ?? ''} onchange={(e) => changeTerminal(e.currentTarget.value)}>
+            <option value="">System default</option>
+            {#each systemState.terminals as option (option.id)}
+              <option value={option.id}>{option.label}</option>
+            {/each}
           </select>
         </label>
         <label class="setting-row stacked">
@@ -1301,7 +1296,59 @@
           </div>
         {/if}
       </section>
+
+      <section class="surface panel settings-panel">
+        <div class="panel-head">
+          <h3 class="h3-icon"><ShieldCheck size={19} aria-hidden="true" /> Diagnostics</h3>
+          <div class="row-actions">
+            <span class="badge {systemState.checkOk ? 'success' : 'warning'}">{systemState.checkOk ? 'Ready' : 'Needs attention'}</span>
+            <button class="btn" type="button" onclick={() => refresh()} disabled={busy} title="Re-run mountos check --json">
+              <RefreshCw size={16} aria-hidden="true" />
+              Run check
+            </button>
+          </div>
+        </div>
+
+        <!-- Setup problems are the actionable half of the readiness check, so
+             they stay on screen. The rest of the old Health page was a dump of
+             what the bundle already contains. -->
+        {#if systemState.issues.length}
+          <div class="issue-list">
+            {#each systemState.issues as issue}
+              <article class="issue">
+                <AlertTriangle size={18} class={issue.severity} aria-hidden="true" />
+                <div>
+                  <strong>{issue.title}</strong>
+                  {#if issue.detail}<p>{issue.detail}</p>{/if}
+                  {#if issue.fixCommand}<code>{issue.fixCommand}</code>{/if}
+                </div>
+              </article>
+            {/each}
+          </div>
+        {/if}
+
+        <div class="setting-row">
+          <span><strong>Diagnostics bundle</strong>{@render Hint('Writes a JSON file with CLI path and version, check and list output, and your saved profiles.')}</span>
+          <button class="btn" type="button" onclick={createBundle} disabled={busy}>
+            <FileArchive size={16} aria-hidden="true" />
+            Create
+          </button>
+        </div>
+        {#if diagnosticsBundle}
+          <div class="setting-row stacked">
+            <span class="mono-label">BUNDLE</span>
+            <div class="bundle-path">
+              <code>{diagnosticsBundle.path}</code>
+              <button class="btn" type="button" onclick={openBundle} disabled={busy}>
+                <FolderOpen size={16} aria-hidden="true" />
+                Open
+              </button>
+            </div>
+          </div>
+        {/if}
+      </section>
     {/if}
+    </div>
     </div>
   </main>
 </div>
@@ -1379,19 +1426,6 @@
 
 {#snippet Hint(text: string)}
   <small class="hint"><Lightbulb size={13} aria-hidden="true" />{text}</small>
-{/snippet}
-
-{#snippet DiagnosticsOutput(title: string, output: DiagnosticsCommandOutput | undefined)}
-  {#if output}
-    <div class="command-preview">
-      <p class="mono-label">{title} <span class="badge {output.status === 0 ? 'success' : 'warning'}">exit {output.status ?? 'unknown'}</span></p>
-      <pre><code>{JSON.stringify(output.stdout, null, 2)}</code></pre>
-      {#if output.stderr && (typeof output.stderr !== 'string' || output.stderr.trim())}
-        <p class="mono-label">STDERR</p>
-        <pre><code>{JSON.stringify(output.stderr, null, 2)}</code></pre>
-      {/if}
-    </div>
-  {/if}
 {/snippet}
 
 <style>
@@ -1534,21 +1568,44 @@
     outline: 0;
   }
 
+  /* Overlays the scroll area instead of occupying it: in flow, appearing and
+     auto-dismissing reflowed every panel below and stole clicks. z-index sits
+     above the sticky table headers (1) and the topbar (10) -- it never overlaps
+     the topbar, but it must win against anything inside the scroll area. The
+     shadow is what sells it as floating rather than inserted. */
   .notice {
+    position: absolute;
+    top: 16px;
+    right: 22px;
+    left: 22px;
+    z-index: 20;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 10px;
-    margin: 16px 22px 0;
     border: 1px solid var(--border);
     background: var(--accent);
     padding: 4px 4px 4px 10px;
+    box-shadow: 0 8px 24px oklch(from var(--foreground) l c h / 0.16);
   }
 
+  /* The tint is layered over an opaque base, not used alone: floating over the
+     scroll area, a translucent fill would let the panel underneath read
+     through it. */
   .notice.error {
     border-color: oklch(from var(--destructive) l c h / 0.45);
-    background: oklch(from var(--destructive) l c h / 0.08);
+    background:
+      linear-gradient(oklch(from var(--destructive) l c h / 0.08), oklch(from var(--destructive) l c h / 0.08)),
+      var(--card);
     color: var(--destructive);
+  }
+
+  .notice.warn {
+    border-color: oklch(from var(--warning) l c h / 0.45);
+    background:
+      linear-gradient(oklch(from var(--warning) l c h / 0.08), oklch(from var(--warning) l c h / 0.08)),
+      var(--card);
+    color: var(--warning);
   }
 
   .notice-dismiss {
@@ -1834,21 +1891,31 @@
     padding: 12px;
   }
 
-  .diagnostics-report {
-    display: grid;
-    gap: 12px;
-    margin-bottom: 14px;
+  /* The path is the point, so it gets the room; the button stays put. */
+  .bundle-path {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
   }
 
-  .diagnostics-grid {
-    display: grid;
-    gap: 6px;
+  .bundle-path code {
+    overflow-wrap: anywhere;
   }
 
   .command-preview pre {
     margin: 0;
     white-space: pre-wrap;
     word-break: break-word;
+  }
+
+  /* Keeps the label and its action on one line; .command-preview's grid gap
+     still spaces this off the block below. */
+  .preview-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
   }
 
   .config-row td {

@@ -39,7 +39,10 @@ export interface MountInstance {
   key: string
   name: string
   mountPath: string
+  /** Device string ("mountos:<volume>"). Identifies the volume, not the backend. */
   fsName?: string
+  /** Transport the mount runs on, from `mountos list`. Absent on older CLIs. */
+  backend?: Backend
   viewMode?: string
   projectVolumeId?: string
   volumeId?: number
@@ -59,6 +62,11 @@ export interface CheckIssue {
   fixCommand?: string
 }
 
+export interface TerminalOption {
+  id: string
+  label: string
+}
+
 export interface SystemState {
   platform: 'macos' | 'windows' | 'linux' | string
   cliPath?: string
@@ -70,6 +78,9 @@ export interface SystemState {
   // the common single-install case). Surfaces ambiguity instead of
   // silently trusting whichever PATH match resolved first.
   cliPathAlternates: string[]
+  // Terminal emulators detected on this machine, in preference order. The
+  // settings picker offers exactly these, so it can only list installed ones.
+  terminals: TerminalOption[]
 }
 
 export interface SecretStatus {
@@ -87,6 +98,10 @@ export interface DesktopSettings {
   // set, a moved/missing pinned binary is a hard error rather than a
   // silent fallback to a different install.
   cliPathOverride?: string
+  // Terminal emulator id for the dashboard launcher. Empty/undefined means the
+  // platform's stock terminal. Unlike cliPathOverride this is a preference, not
+  // a pin: an uninstalled choice falls back instead of failing.
+  terminal?: string
 }
 
 export interface ExportedProfile {

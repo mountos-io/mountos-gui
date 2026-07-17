@@ -15,7 +15,7 @@
     await getCurrentWindow().hide()
   }
 
-  let systemState = $state<SystemState>({ platform: 'macos', checkOk: false, issues: [], instances: [], cliPathAlternates: [] })
+  let systemState = $state<SystemState>({ platform: 'macos', checkOk: false, issues: [], instances: [], cliPathAlternates: [], terminals: [] })
   let loaded = $state(false)
   let busy = $state(false)
 

@@ -64,6 +64,9 @@ export async function getSystemState(): Promise<SystemState> {
         },
       ],
       cliPathAlternates: [],
+      // Web preview has no host to scan, so the picker shows only "System
+      // default" rather than terminals it could never launch.
+      terminals: [],
     }
   }
   return invoke<SystemState>('get_system_state')
@@ -132,6 +135,11 @@ export async function unmountAllTargets(): Promise<UnmountAllResult> {
 export async function openTarget(target: string): Promise<void> {
   if (!hasDesktopBridge()) return
   await invoke('open_target', { target })
+}
+
+export async function openDiagnosticsBundle(path: string): Promise<void> {
+  if (!hasDesktopBridge()) return
+  await invoke('open_diagnostics_bundle', { path })
 }
 
 export async function getInstanceConfig(target: string): Promise<string> {

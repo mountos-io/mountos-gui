@@ -171,6 +171,17 @@ p {
   overflow: hidden;
 }
 
+/* Positioning context for the floating notice. Sits between the sticky topbar
+   and the scroll area so an overlaid notice covers neither the topbar nor the
+   sidebar. */
+.main-area {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
 .main-content {
   display: flex;
   flex-direction: column;
@@ -406,6 +417,15 @@ p {
   border-bottom: 1px solid var(--border);
   padding: 10px 8px;
   vertical-align: middle;
+}
+
+/* Name and Target hold volume names and mount paths: long, and with no spaces
+   to break at. Fold them mid-token so the whole value stays readable and the
+   row grows downward, instead of the cell forcing the table wider than the
+   window. The later columns are short and fixed, so they keep their width. */
+.table td:nth-child(1),
+.table td:nth-child(2) {
+  overflow-wrap: anywhere;
 }
 
 .corner-brackets {
