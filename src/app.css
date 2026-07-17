@@ -139,9 +139,14 @@ p {
   color: var(--primary-foreground);
 }
 
+/* minmax(0, 1fr), not 1fr: a bare 1fr track has an AUTO minimum, so the main
+   column refuses to shrink below its content's min-content width and overflows
+   the window instead (the profiles view is the trigger -- its own grid has a
+   220px minimum column plus the editor). .main's min-width: 0 cannot rescue
+   this: the floor is on the track, not the item. */
 .app-shell {
   display: grid;
-  grid-template-columns: 14.5rem 1fr;
+  grid-template-columns: 14.5rem minmax(0, 1fr);
   height: 100%;
   background: var(--background);
   color: var(--foreground);
@@ -149,7 +154,7 @@ p {
 }
 
 .app-shell.sidebar-collapsed {
-  grid-template-columns: 4.5rem 1fr;
+  grid-template-columns: 4.5rem minmax(0, 1fr);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -527,7 +532,9 @@ p {
 
 @media (max-width: 860px) {
   .app-shell {
-    grid-template-columns: 1fr;
+    /* minmax(0, ...) for the same reason as the two-column rule above: a bare
+       1fr still floors at the content's min-content width. */
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .sidebar {

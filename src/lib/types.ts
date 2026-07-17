@@ -51,6 +51,8 @@ export interface MountInstance {
   versionInode?: string
   orphaned?: boolean
   external: boolean
+  /** Saved profile matching this mount's path, if any. `external` is this being absent. */
+  profileId?: string
   health: HealthState
 }
 

@@ -69,6 +69,7 @@
   // mountOS access key IDs are fixed-length; this only checks length (not
   // charset) since that's the one constraint the GUI can enforce cheaply.
   const ACCESS_KEY_ID_LENGTH = 20
+  const SECRET_ACCESS_KEY_LENGTH = 40
 
   let view = $state<View>('instances')
   let loaded = $state(false)
@@ -283,12 +284,29 @@
 
   function duplicateSelected() {
     if (!selectedProfile) return
-    const { id: _id, createdAt: _created, updatedAt: _updated, ...rest } = selectedProfile
+    duplicateProfile(selectedProfile)
+  }
+
+  // secretRef resets to 'prompt' rather than carrying the vault reference over:
+  // a copy is a new profile, and it should not silently inherit access to a
+  // secret the user stored against a different one.
+  function duplicateProfile(profile: MountProfile) {
+    const { id: _id, createdAt: _created, updatedAt: _updated, ...rest } = profile
     newProfile({
       ...rest,
-      name: `${selectedProfile.name} copy`,
+      name: `${profile.name} copy`,
       secretRef: 'prompt',
     })
+  }
+
+  // A mount that already has a profile has nothing to "save", so the row offers
+  // to clone that profile instead -- the useful move from here is starting a
+  // variant (another fork, another mount path) from a config known to work.
+  function cloneProfileFor(instance: MountInstance) {
+    const profile = profiles.find((candidate) => candidate.id === instance.profileId)
+    if (!profile) return
+    duplicateProfile(profile)
+    notify(`Cloned "${profile.name}". Adjust and save.`)
   }
 
   async function exportSelected() {
@@ -677,6 +695,17 @@
     if (!selectedProfile.mountPath.trim()) return 'Mount path is required for this backend'
     return validateMountPathForBackend(selectedProfile.backend, selectedProfile.mountPath) ?? ''
   })
+  // Trimmed once and used for both the check and the mount: a secret pasted with
+  // a stray leading/trailing space is the user's intent minus a copy artefact,
+  // and validating the trimmed value while submitting the raw one would fail the
+  // mount for a reason the dialog said was fine.
+  const trimmedSecret = $derived(secretValue.trim())
+  const secretLengthError = $derived(
+    trimmedSecret.length === SECRET_ACCESS_KEY_LENGTH
+      ? ''
+      : `Secret access key must be ${SECRET_ACCESS_KEY_LENGTH} characters (${trimmedSecret.length} so far)`,
+  )
+
   const accessKeyError = $derived.by(() => {
     if (!selectedProfile || !selectedProfile.accessKeyId) return ''
     return selectedProfile.accessKeyId.length === ACCESS_KEY_ID_LENGTH ? '' : `Access key ID must be ${ACCESS_KEY_ID_LENGTH} characters`
@@ -1036,10 +1065,19 @@
                           <LayoutDashboard size={16} aria-hidden="true" />
                         </button>
                       {/if}
-                      {#if instance.external && canOpen(instance)}
-                        <button class="btn icon-btn" type="button" title="Save as profile" aria-label="Save as profile" disabled={busy} onclick={() => saveAsProfile(instance)}>
-                          <FilePlus size={16} aria-hidden="true" />
-                        </button>
+                      <!-- The slot always holds one action, so the column does
+                           not reflow between rows: nothing to save once a
+                           profile exists, but cloning it is still useful. -->
+                      {#if canOpen(instance)}
+                        {#if instance.external}
+                          <button class="btn icon-btn" type="button" title="Save as profile" aria-label="Save as profile" disabled={busy} onclick={() => saveAsProfile(instance)}>
+                            <FilePlus size={16} aria-hidden="true" />
+                          </button>
+                        {:else if instance.profileId}
+                          <button class="btn icon-btn" type="button" title="Clone profile" aria-label="Clone profile" disabled={busy} onclick={() => cloneProfileFor(instance)}>
+                            <Copy size={16} aria-hidden="true" />
+                          </button>
+                        {/if}
                       {/if}
                       <button class="btn icon-btn destructive" type="button" title="Unmount" aria-label="Unmount" disabled={busy} onclick={() => requestUnmount(instance)}>
                         <Unplug size={16} aria-hidden="true" />
@@ -1455,14 +1493,25 @@
 
 <dialog class="modal" bind:this={secretDialog} onclose={cancelSecret} aria-labelledby="secret-dialog-title">
   {#if secretPromptFor}
-    <form onsubmit={(event) => { event.preventDefault(); void doMount(secretPromptFor!, secretValue) }}>
+    <form onsubmit={(event) => { event.preventDefault(); void doMount(secretPromptFor!, trimmedSecret) }}>
       <div class="modal-head">
         <KeyRound size={20} aria-hidden="true" />
         <h3 id="secret-dialog-title">Enter secret access key</h3>
       </div>
-      <p>The secret is written to child stdin with a trailing newline. It is never placed on argv or in the environment by the GUI.</p>
+      <!-- No prose here on purpose: how the secret reaches the CLI (stdin, never
+           argv or env) is implementation the operator cannot act on, and this
+           dialog appears on every prompted mount. The checkbox below is the only
+           decision, and it states what happens to the value. -->
       <!-- svelte-ignore a11y_autofocus -->
-      <input class="input" type="password" bind:value={secretValue} autocomplete="current-password" autofocus aria-label="Secret access key" />
+      <label class="field secret-field">
+        <span class="sr-only">Secret access key</span>
+        <input class="input" type="password" bind:value={secretValue} autocomplete="current-password" autofocus aria-label="Secret access key" aria-invalid={!!secretValue && !!secretLengthError} />
+        <!-- Only once they have typed: the length rule is not news on an empty
+             field, but a disabled Mount with no stated reason is. -->
+        {#if secretValue && secretLengthError}
+          <small class="field-error">{secretLengthError}</small>
+        {/if}
+      </label>
       <label class="save-secret">
         <input type="checkbox" bind:checked={savePromptedSecret} />
         Store in OS vault for this profile
@@ -1817,19 +1866,40 @@
   .profiles-layout {
     display: grid;
     flex: 1;
+    /* Lets the grid be shorter than its content so the panes below can own the
+       scrolling. Without it the row grows to the tallest pane and the page
+       scrolls instead: at 50 profiles the list alone is ~2600px, which pushed
+       the editor (and its Save) far past the bottom of the window. */
+    min-height: 0;
     grid-template-columns: minmax(220px, 0.34fr) minmax(0, 1fr);
     gap: 16px;
     padding: 22px;
   }
 
+  /* Master-detail: each pane scrolls within the window rather than scrolling the
+     page as one column. The profile list can then grow without limit and the
+     editor stays where it is. */
   .profiles-layout .panel {
     margin: 0;
+    min-height: 0;
+    overflow-y: auto;
   }
 
+  /* The implicit track would be `auto`, whose minimum is the row's min-content
+     -- the full untruncated mount path -- so the row grew past the panel and the
+     path clipped at the border instead of ellipsising. Same auto-minimum trap as
+     .app-shell's columns. */
   .profile-list {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 4px;
     margin-top: 12px;
+  }
+
+  /* Both are needed: the row must be allowed to shrink as a grid item, and the
+     span as the row's flex item, before text-overflow can ever apply. */
+  .profile-row {
+    min-width: 0;
   }
 
   .profile-row span {
@@ -2120,12 +2190,14 @@
   }
 
   @media (max-width: 860px) {
+    /* minmax(0, ...): a bare 1fr floors at min-content, which is what let these
+       overflow at the window's own minimum width. */
     .profiles-layout {
-      grid-template-columns: 1fr;
+      grid-template-columns: minmax(0, 1fr);
     }
 
     .form-grid {
-      grid-template-columns: 1fr;
+      grid-template-columns: minmax(0, 1fr);
     }
   }
 

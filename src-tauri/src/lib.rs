@@ -103,6 +103,9 @@ struct MountInstance {
     version_inode: Option<String>,
     orphaned: Option<bool>,
     external: bool,
+    // Id of the saved profile whose mount path matches this mount, if any.
+    // external is simply this being absent.
+    profile_id: Option<String>,
     health: String,
 }
 
@@ -1000,7 +1003,10 @@ fn parse_instances_value(value: &Value) -> Vec<MountInstance> {
                     .and_then(Value::as_str)
                     .map(ToString::to_string),
                 orphaned,
+                // Both are corrected once the saved profiles are read (see
+                // get_system_state); listing alone cannot know.
                 external: true,
+                profile_id: None,
                 health: if orphaned == Some(true) {
                     "lost"
                 } else if limited {
@@ -1288,13 +1294,19 @@ fn get_system_state_blocking(app: AppHandle) -> Result<SystemState, DesktopError
     let profile_targets = read_profiles(&app)
         .unwrap_or_default()
         .into_iter()
-        .map(|profile| profile.mount_path)
-        .filter(|target| !target.is_empty())
+        .filter(|profile| !profile.mount_path.is_empty())
+        .map(|profile| (profile.id, profile.mount_path))
         .collect::<Vec<_>>();
     for instance in &mut instances {
-        instance.external = !profile_targets
+        // Report WHICH profile matched, not just that one did: the row offers to
+        // clone it, and re-deriving the match in the frontend would mean
+        // duplicating targets_equal's path normalisation (/tmp vs /private/tmp)
+        // where it could silently drift from this.
+        instance.profile_id = profile_targets
             .iter()
-            .any(|target| targets_equal(target, &instance.mount_path));
+            .find(|(_, target)| targets_equal(target, &instance.mount_path))
+            .map(|(id, _)| id.clone());
+        instance.external = instance.profile_id.is_none();
     }
     let cli_path_alternates = other_cli_paths_on_path(cli_path.as_deref());
     Ok(SystemState {
