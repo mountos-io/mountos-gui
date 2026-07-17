@@ -50,8 +50,12 @@
   --secondary: oklch(0.15 0.005 200);
   --secondary-foreground: oklch(0.85 0.005 200);
   --muted: oklch(0.09 0.005 200);
-  --muted-foreground: oklch(0.55 0.01 200);
-  --label-foreground: oklch(0.55 0.01 200);
+  /* L 0.58, not 0.55: at 0.55 these carried 4.35:1 on --card and 4.32:1 on
+     --background, under WCAG AA's 4.5 for the hints, mono labels and table
+     headers they colour. 0.56 is the bare minimum (4.50 on --background);
+     0.58 leaves headroom without lifting the muted tone into the foreground. */
+  --muted-foreground: oklch(0.58 0.01 200);
+  --label-foreground: oklch(0.58 0.01 200);
   --accent: oklch(0.16 0.008 200);
   --accent-foreground: oklch(0.93 0.005 200);
   --destructive: oklch(0.59 0.2 21);
@@ -238,12 +242,17 @@ p {
   box-shadow: none;
 }
 
+/* 1rem, not 0.7rem: PRODUCT.md sets a 16px floor for all UI text and this label
+   (and .table th, which mirrors it) was 11.2px. Tracking drops 0.2em -> 0.1em
+   at the same time: 0.2em was tuned for 11px, and tracking is relative to size,
+   so carrying it up to 16px would push every label ~45% wider for no legibility
+   gain. The wide-tracked uppercase character survives; only the excess goes. */
 .mono-label {
   color: var(--label-foreground);
   font-family: ui-monospace, Menlo, monospace;
-  font-size: 0.7rem;
+  font-size: 1rem;
   font-weight: 400;
-  letter-spacing: 0.2em;
+  letter-spacing: 0.1em;
   line-height: 1.4;
   text-transform: uppercase;
 }
@@ -409,9 +418,10 @@ p {
   background: var(--card);
   color: var(--label-foreground);
   font-family: ui-monospace, Menlo, monospace;
-  font-size: 0.7rem;
+  /* Mirrors .mono-label deliberately -- see the 16px-floor note there. */
+  font-size: 1rem;
   font-weight: 400;
-  letter-spacing: 0.2em;
+  letter-spacing: 0.1em;
   padding: 8px;
   text-align: left;
   text-transform: uppercase;

@@ -31,6 +31,8 @@
     Unplug,
     X,
   } from '@lucide/svelte'
+  import { prefersReducedMotion } from 'svelte/motion'
+  import { fade } from 'svelte/transition'
   import { backendNeedsMountPath, buildMountArgv, classifyMountError, errorClassLabel, FSKIT_MOUNT_PREFIX, isAbsolutePath, isValidFolderName, parseArgvInput, validateExtraArgs, validateMountPathForBackend } from './lib/cli'
   import { healthTone } from './lib/health'
   import { applyTheme, loadTheme, saveTheme } from './lib/theme'
@@ -117,6 +119,10 @@
   // did not happen, so they need a decision. Info and warnings are transient
   // status about things that happened on their own, and clear themselves.
   const NOTICE_AUTO_DISMISS_MS = 6000
+  // The notice fades rather than vanishing: an instant disappearance reads as a
+  // glitch, and gives no cue that the message is on its way out. Long enough to
+  // register, short enough not to sit in the way (product motion is 150-250ms).
+  const NOTICE_FADE_MS = 200
 
   // Mount-list refresh cadence. The options are fixed rather than a free number
   // field: the useful range is small, and a typo'd 0 would hammer the CLI.
@@ -127,11 +133,29 @@
   function notify(text: string, kind: 'info' | 'warn' | 'error' = 'info') {
     message = text
     messageKind = kind
+    armNoticeDismiss()
+  }
+
+  // Errors never self-clear, so they never arm.
+  function armNoticeDismiss() {
     clearTimeout(messageTimer)
     messageTimer = undefined
-    if (kind !== 'error') {
+    if (messageKind !== 'error') {
       messageTimer = setTimeout(() => { message = '' }, NOTICE_AUTO_DISMISS_MS)
     }
+  }
+
+  // Hovering or focusing the notice holds it open: it should not vanish out from
+  // under someone who is still reading it or reaching for its close button.
+  // Leaving restarts the full countdown rather than resuming a partial one --
+  // they just looked away, so give them the whole window again.
+  function holdNotice() {
+    clearTimeout(messageTimer)
+    messageTimer = undefined
+  }
+
+  function releaseNotice() {
+    if (message) armNoticeDismiss()
   }
 
   function dismissNotice() {
@@ -900,8 +924,26 @@
          stays clear of the sidebar and the sticky topbar. -->
     <div class="main-area">
     {#if message}
-      <div class="notice" class:error={messageKind === 'error'} class:warn={messageKind === 'warn'} role={messageKind === 'error' ? 'alert' : 'status'}>
-        <span>{message}</span>
+      <div
+        class="notice"
+        class:error={messageKind === 'error'}
+        class:warn={messageKind === 'warn'}
+        role={messageKind === 'error' ? 'alert' : 'status'}
+        transition:fade={{ duration: prefersReducedMotion.current ? 0 : NOTICE_FADE_MS }}
+        onmouseenter={holdNotice}
+        onmouseleave={releaseNotice}
+        onfocusin={holdNotice}
+        onfocusout={releaseNotice}
+      >
+        <span class="notice-body">
+          <!-- Not decoration: without it, error/warn/info differ only by colour
+               (WCAG 1.4.1). The icon carries the semantic hue so the message
+               text can stay high-contrast foreground. -->
+          {#if messageKind !== 'info'}
+            <AlertTriangle size={17} class="notice-icon" aria-hidden="true" />
+          {/if}
+          {message}
+        </span>
         <button class="btn ghost icon-btn notice-dismiss" type="button" aria-label="Dismiss message" onclick={dismissNotice}>
           <X size={15} aria-hidden="true" />
         </button>
@@ -1647,14 +1689,30 @@
     box-shadow: 0 8px 24px oklch(from var(--foreground) l c h / 0.16);
   }
 
+  .notice-body {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
   /* The tint is layered over an opaque base, not used alone: floating over the
      scroll area, a translucent fill would let the panel underneath read
-     through it. */
+     through it.
+
+     The hue lives on the border and icon, not the message text. As text over
+     its own tint, --destructive measured 4.48:1 in light and 3.58:1 in dark
+     (WCAG AA needs 4.5) -- the tint lifts the near-black dark surface just
+     enough to break it. Foreground text is ~16:1 in both themes and the
+     variant is still legible without relying on colour. */
   .notice.error {
     border-color: oklch(from var(--destructive) l c h / 0.45);
     background:
       linear-gradient(oklch(from var(--destructive) l c h / 0.08), oklch(from var(--destructive) l c h / 0.08)),
       var(--card);
+  }
+
+  .notice.error :global(.notice-icon) {
     color: var(--destructive);
   }
 
@@ -1663,7 +1721,14 @@
     background:
       linear-gradient(oklch(from var(--warning) l c h / 0.08), oklch(from var(--warning) l c h / 0.08)),
       var(--card);
+  }
+
+  .notice.warn :global(.notice-icon) {
     color: var(--warning);
+  }
+
+  .notice :global(.notice-icon) {
+    flex-shrink: 0;
   }
 
   .notice-dismiss {
@@ -1716,10 +1781,12 @@
     overflow: auto;
   }
 
+  /* 1rem, not 0.95rem: paths and command previews are the content operators
+     actually read here, and 15.2px sat under the 16px floor. */
   code {
     color: var(--foreground);
     font-family: ui-monospace, Menlo, monospace;
-    font-size: 0.95rem;
+    font-size: 1rem;
     letter-spacing: 0;
   }
 
@@ -1839,12 +1906,6 @@
     font-weight: 500;
   }
 
-  .btn.small {
-    min-height: 28px;
-    padding: 4px 10px;
-    font-size: 0.875rem;
-    font-family: ui-monospace, Menlo, monospace;
-  }
 
   .toggles {
     display: flex;
@@ -1976,9 +2037,13 @@
     gap: 10px;
   }
 
+  /* Even inset on all four sides. Inheriting .table td (10px 8px) framed the
+     panel unevenly, and the old padding-top:0 dropped the top edge entirely --
+     the panel is a block inside the row, not another dense data cell, so it
+     does not want the table's tighter horizontal rhythm. */
   .config-row td {
     background: var(--muted);
-    padding-top: 0;
+    padding: 10px;
   }
 
   .config-row .command-preview {

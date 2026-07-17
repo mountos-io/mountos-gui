@@ -82,10 +82,10 @@ typography:
     letterSpacing: "-0.01em"
   mono:
     fontFamily: "ui-monospace, Menlo, monospace"
-    fontSize: "0.7rem"
+    fontSize: "1rem"
     fontWeight: 400
     lineHeight: 1.4
-    letterSpacing: "0.2em"
+    letterSpacing: "0.1em"
 rounded:
   sm: "0"
   md: "2px"
@@ -201,11 +201,11 @@ System sans stack with `cv02 cv03 cv04 cv11` OpenType features; mono is `ui-mono
 - **Body** 400 / 1.125rem / 1.6 / -0.01em: default prose.
 - **Body Small** 400 / 1.0625rem / 1.5: table cells, dense lists.
 - **Label** 500 / 1rem / 1.5: button text, form labels. 16px is the floor.
-- **Mono Microlabel** 400 / 0.7rem / 0.2em tracking, uppercase: table column headers and technical metadata labels only.
+- **Mono Microlabel** 400 / 1rem / 0.1em tracking, uppercase: table column headers and technical metadata labels only.
 
 ### Named Rules
 
-**The 16px Floor Rule.** No UI text below 16px. The only exception is the 0.7rem mono microlabel on table headers and technical metadata, which is a label, not prose.
+**The 16px Floor Rule.** No UI text below 16px. No exceptions — the mono microlabel used to be carved out at 0.7rem (11.2px) and was raised to 1rem to close it. Its tracking dropped 0.2em → 0.1em at the same time: tracking is relative to size, so the value tuned for 11px would have made every label ~45% wider at 16px for no legibility gain.
 
 **The Mono-For-Microlabels-Only Rule.** Mono is reserved for table column headers, technical IDs, paths, and command previews. Forbidden in body copy, button labels, headings, and as decorative section eyebrows. One mono microlabel above a code/command block is technical metadata; a mono eyebrow above every section is banned scaffolding.
 
