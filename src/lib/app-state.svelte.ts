@@ -1536,7 +1536,7 @@ export async function changeAllowForkForceDelete(enabled: boolean) {
 export async function changePollSeconds(seconds: number) {
   try {
     state.settings = await saveSettings({ ...state.settings, pollSeconds: seconds })
-    notify(`Mount list refreshes every ${seconds}s`)
+    notify(seconds === 0 ? 'Auto-refresh is off' : `Mount list refreshes every ${seconds}s`)
   } catch (error) {
     notify(error instanceof Error ? error.message : 'Failed to save settings', 'error')
   }

@@ -71,13 +71,24 @@ function pastelBadgeStyle(tone: string): string {
   return `background: transparent; color: var(--pastel-${tone}-text); border-color: oklch(from var(--pastel-${tone}) l c h / 0.3);`
 }
 
+// Intl.NumberFormat's unit style, not hand-rolled pluralization: correct
+// pluralization/wording is a locale problem (English "add an s" rules don't
+// generalize), and the platform already solves it -- same reasoning as
+// formatMountedSince using toLocaleString() for the absolute side. narrow
+// display (not long) since this is the row badge text itself, where space is
+// tight -- the title tooltip already carries the full "Mounted at ..." form.
+function formatUnit(quantity: number, unit: 'day' | 'hour' | 'minute'): string {
+  return new Intl.NumberFormat(undefined, { style: 'unit', unit, unitDisplay: 'narrow' }).format(quantity)
+}
+
 /**
- * "Up 2h 14m" style duration since `mountTime`, or undefined when it's
+ * "Up 18m" style compact duration since `mountTime`, or undefined when it's
  * missing/unparseable (older CLI, config not written yet). Recomputed on
- * every poll tick rather than ticking live on its own timer -- the row
- * already re-renders on the same cadence, and a frozen value between polls
- * (or while polling is off) matches how every other field in this row
- * already behaves without a fetch.
+ * every poll tick rather than ticking live on its own timer -- meant for
+ * when auto-refresh is actually on, so the row keeps recomputing this on a
+ * real cadence. With polling off nothing re-renders this row again until a
+ * manual refresh, so a relative duration would silently freeze and read as
+ * live when it isn't -- use formatMountedSince instead in that case.
  */
 export function formatUptime(mountTime?: string): string | undefined {
   if (!mountTime) return undefined
@@ -88,7 +99,24 @@ export function formatUptime(mountTime?: string): string | undefined {
   const days = Math.floor(totalMinutes / 1440)
   const hours = Math.floor((totalMinutes % 1440) / 60)
   const minutes = totalMinutes % 60
-  if (days > 0) return `${days}d ${hours}h`
-  if (hours > 0) return `${hours}h ${minutes}m`
-  return `${minutes}m`
+  if (days > 0) return hours > 0 ? `${formatUnit(days, 'day')} ${formatUnit(hours, 'hour')}` : formatUnit(days, 'day')
+  if (hours > 0) return minutes > 0 ? `${formatUnit(hours, 'hour')} ${formatUnit(minutes, 'minute')}` : formatUnit(hours, 'hour')
+  return formatUnit(minutes, 'minute')
+}
+
+/**
+ * Absolute local time for `mountTime`, in whatever date/time format the
+ * user's own OS locale already uses (no custom format options) -- it should
+ * read the way every other timestamp on their machine already does, not
+ * some format this app invented. Unlike formatUptime, this never goes stale
+ * between refreshes -- an absolute instant in time is just as correct read
+ * a minute or a day after the last poll, which is exactly what you want
+ * once auto-refresh is off and nothing is going to recompute a relative
+ * duration for you.
+ */
+export function formatMountedSince(mountTime?: string): string | undefined {
+  if (!mountTime) return undefined
+  const started = Date.parse(mountTime)
+  if (Number.isNaN(started)) return undefined
+  return new Date(started).toLocaleString()
 }

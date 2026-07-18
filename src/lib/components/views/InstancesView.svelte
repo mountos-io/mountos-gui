@@ -22,7 +22,7 @@
   import { Skeleton } from '$lib/components/ui/skeleton'
   import GatewayLaunchesPanel from '$lib/components/GatewayLaunchesPanel.svelte'
   import InstanceConfigPanel from '$lib/components/InstanceConfigPanel.svelte'
-  import { backendBadgeStyle, formatUptime, healthTitle, healthTone, viewModeBadge, volumeKindBadgeStyle } from '$lib/health'
+  import { backendBadgeStyle, formatMountedSince, formatUptime, healthTitle, healthTone, viewModeBadge, volumeKindBadgeStyle } from '$lib/health'
   import type { MountInstance } from '$lib/types'
   import {
     appState,
@@ -31,6 +31,7 @@
     cloneProfileFor,
     copyConfig,
     computed,
+    DEFAULT_POLL_SECONDS,
     gatewayInfoForInstance,
     openDashboard,
     profileForInstance,
@@ -117,8 +118,16 @@
                 {#if gatewayInfoForInstance(instance)}
                   <Badge title="This mount also has an S3/HDFS gateway running, launched from this app">Gateway</Badge>
                 {/if}
-                {#if formatUptime(instance.mountTime)}
-                  <Badge variant="secondary" title={`Mounted at ${new Date(instance.mountTime!).toLocaleString()}`}>Up {formatUptime(instance.mountTime)}</Badge>
+                {#if (appState.settings.pollSeconds ?? DEFAULT_POLL_SECONDS) === 0}
+                  <!-- Polling off: nothing re-renders this row again until a manual
+                       refresh, so a relative "Up Xh Ym" would silently freeze and
+                       read as live when it isn't. An absolute time stays correct
+                       regardless of how long it sits unrefreshed. -->
+                  {#if formatMountedSince(instance.mountTime)}
+                    <Badge variant="secondary" title="Auto-refresh is off -- hit Refresh to update">Since {formatMountedSince(instance.mountTime)}</Badge>
+                  {/if}
+                {:else if formatUptime(instance.mountTime)}
+                  <Badge variant="secondary" title={`Mounted at ${formatMountedSince(instance.mountTime)}`}>Up {formatUptime(instance.mountTime)}</Badge>
                 {/if}
               </span>
             </Table.Cell>
