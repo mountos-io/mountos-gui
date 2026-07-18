@@ -10,8 +10,9 @@
   import Callout from '$lib/components/Callout.svelte'
   import CommandPreview from '$lib/components/CommandPreview.svelte'
   import InfoTip from '$lib/components/shared/InfoTip.svelte'
-  import { themeState, setTheme } from '$lib/theme.svelte'
+  import { themeState, setTheme, setSkin } from '$lib/theme.svelte'
   import type { Theme } from '$lib/theme.svelte'
+  import { presetsForMode, defaultSkin } from '$lib/themes'
   import type { Backend } from '$lib/types'
   import {
     appState,
@@ -50,12 +51,18 @@
       label: seconds === 0 ? 'Off' : `${seconds}s${seconds === DEFAULT_POLL_SECONDS ? ' (default)' : ''}`,
     })),
   )
+
+  // Filtered by the live resolved mode (not just an explicit Light/Dark
+  // pick) so the picker still works under "System" -- and stays correct if
+  // the OS appearance flips while this view is open.
+  const skinPresets = $derived(presetsForMode(themeState.resolvedMode))
+  const defaultSkinName = $derived(defaultSkin(themeState.resolvedMode))
 </script>
 
 <section class="corner-brackets surface m-[22px] p-4 grid gap-5">
   <h3>Desktop policies</h3>
 
-  <div class="grid gap-3">
+  <div class="grid gap-3" id="settings-appearance">
     <span class="mono-label">Appearance</span>
     <div class="flex items-center justify-between gap-4">
       <span class="inline-flex items-center gap-1"><strong>Theme</strong><InfoTip text="Follows the system appearance until you pick Light or Dark." /></span>
@@ -65,6 +72,26 @@
             <option.icon size={15} aria-hidden="true" />
             {option.label}
           </Button>
+        {/each}
+      </div>
+    </div>
+    <div class="grid gap-1.5">
+      <span class="inline-flex items-center gap-1"><strong>Skin</strong><InfoTip text="Named color palette for the current mode." /></span>
+      <div class="flex flex-wrap gap-2" role="group" aria-label="Skin">
+        {#each skinPresets as preset (preset.name)}
+          {@const isDefault = preset.name === defaultSkinName}
+          {@const active = isDefault ? !themeState.skin || themeState.skin === defaultSkinName : themeState.skin === preset.name}
+          <button
+            type="button"
+            class="skin-swatch {active ? 'ring-2 ring-primary' : ''}"
+            style="--sw-bg: {preset.colors.background}; --sw-fg: {preset.colors.primary};"
+            onclick={() => setSkin(isDefault ? '' : preset.name)}
+            aria-pressed={active}
+            title={isDefault ? 'mountOS (default)' : preset.name}
+          >
+            <span class="sw-dot"></span>
+            <span class="sw-label">{isDefault ? 'mountOS' : preset.name.replace(/ (Light|Dark)$/, '')}</span>
+          </button>
         {/each}
       </div>
     </div>
@@ -92,7 +119,7 @@
       <span class="inline-flex items-center gap-1"><strong>Refresh interval</strong><InfoTip text="How often mounts refresh. Off disables auto-refresh; use the Refresh button instead." /></span>
       <Select options={pollOptions} value={String(appState.settings.pollSeconds ?? DEFAULT_POLL_SECONDS)} onchange={(value) => changePollSeconds(Number(value))} class="w-48" />
     </div>
-    <div class="flex items-center justify-between gap-4">
+    <div class="flex items-center justify-between gap-4" id="settings-terminal">
       <span class="inline-flex items-center gap-1"><strong>Terminal</strong><InfoTip text="Where the dashboard opens. Falls back to the system default if uninstalled." /></span>
       <Select options={terminalOptions} value={appState.settings.terminal ?? ''} onchange={(value) => changeTerminal(value)} class="w-48" />
     </div>
@@ -148,7 +175,7 @@
   </div>
 </section>
 
-<section class="surface m-[22px] p-4 grid gap-4">
+<section class="surface m-[22px] p-4 grid gap-4" id="settings-mcp">
   <div class="flex items-start justify-between gap-4">
     <h3 class="flex items-center gap-2"><Bot size={19} aria-hidden="true" /> MCP for AI agents</h3>
     <div class="flex flex-wrap items-center gap-2">
@@ -198,7 +225,7 @@
     </div>
   {/if}
 
-  <div class="flex items-center justify-between gap-4">
+  <div class="flex items-center justify-between gap-4" id="settings-diagnostics-bundle">
     <span class="inline-flex items-center gap-1"><strong>Diagnostics bundle</strong><InfoTip text="Writes a JSON file with CLI info, check/list output, and saved profiles." /></span>
     <Button type="button" onclick={createBundle} disabled={appState.busy}>
       <FileArchive size={16} aria-hidden="true" />
@@ -218,3 +245,41 @@
     </div>
   {/if}
 </section>
+
+<style>
+  .skin-swatch {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--sw-bg);
+    cursor: pointer;
+    transition: transform 0.15s;
+  }
+
+  .skin-swatch:hover {
+    transform: scale(1.05);
+  }
+
+  .skin-swatch:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  .sw-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--sw-fg);
+    border: 1px solid color-mix(in oklch, var(--sw-fg) 60%, transparent);
+  }
+
+  .sw-label {
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--sw-fg);
+    white-space: nowrap;
+  }
+</style>

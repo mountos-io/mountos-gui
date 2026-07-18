@@ -15,7 +15,7 @@
         <p class="py-4">Deletes "{appState.deletePromptFor.name}" and its vaulted secret. Running mounts are not affected.</p>
         <Dialog.Footer>
           <Button type="button" variant="outline" onclick={cancelDelete}>Cancel</Button>
-          <Button type="submit" variant="destructive" class="cyberpunk-skewed-sm" disabled={appState.busy}>Delete</Button>
+          <Button type="submit" variant="destructive-solid" class="cyberpunk-skewed-sm" disabled={appState.busy}>Delete</Button>
         </Dialog.Footer>
       </form>
     {/if}

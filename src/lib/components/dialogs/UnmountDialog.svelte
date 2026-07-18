@@ -16,13 +16,13 @@
           </Dialog.Title>
         </Dialog.Header>
         {#if appState.unmountPromptFor === 'all'}
-          <p class="py-4">Unmount all {appState.systemState.instances.length} running mounts? Each stops flushing in the background once unmounted.</p>
+          <p class="py-4">Unmount all {appState.systemState.instances.length} running mounts?</p>
         {:else}
-          <p class="py-4">Unmount "{appState.unmountPromptFor.name || appState.unmountPromptFor.mountPath}"? It stops flushing in the background once unmounted.</p>
+          <p class="py-4">Unmount "{appState.unmountPromptFor.name || appState.unmountPromptFor.mountPath}"?</p>
         {/if}
         <Dialog.Footer>
           <Button type="button" variant="outline" onclick={cancelUnmountPrompt}>Cancel</Button>
-          <Button type="submit" variant="destructive" class="cyberpunk-skewed-sm" disabled={appState.busy}>Unmount</Button>
+          <Button type="submit" variant="destructive-solid" class="cyberpunk-skewed-sm" disabled={appState.busy}>Unmount</Button>
         </Dialog.Footer>
       </form>
     {/if}

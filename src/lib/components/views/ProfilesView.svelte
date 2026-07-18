@@ -15,6 +15,7 @@
     Power,
     Recycle,
     Save,
+    Search,
     Trash2,
   } from '@lucide/svelte'
   import { Button } from '$lib/components/ui/button'
@@ -72,8 +73,13 @@
 <section class="grid grid-cols-[240px_minmax(0,1fr)] gap-4 m-[22px]">
   <div class="surface p-4">
     <h3 class="mb-4">Saved Profiles</h3>
+    <label class="relative flex items-center mb-3">
+      <Search size={15} aria-hidden="true" class="absolute left-2.5 text-muted-foreground" />
+      <span class="sr-only">Search profile names</span>
+      <Input bind:value={appState.profileQuery} placeholder="Search profiles" class="pl-8" />
+    </label>
     <div class="grid gap-1.5">
-      {#each appState.profiles as profile (profile.id)}
+      {#each computed.filteredProfiles as profile (profile.id)}
         <button
           class:bg-accent={appState.selectedProfileId === profile.id}
           class="flex min-w-0 items-center gap-2.5 border border-transparent p-2 text-left outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring"
@@ -86,7 +92,7 @@
         </button>
       {:else}
         <div class="tech-grid p-7 text-center">
-          <p>No saved profiles yet.</p>
+          <p>{appState.profiles.length === 0 ? 'No saved profiles yet.' : `No profiles match "${appState.profileQuery}".`}</p>
         </div>
       {/each}
     </div>

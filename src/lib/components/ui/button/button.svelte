@@ -10,6 +10,11 @@
         default: "bg-transparent text-foreground border border-border hover:bg-accent hover:border-foreground/40 active:bg-primary/10 active:border-primary/30 active:scale-[0.98] transition-[color,background-color,border-color,transform,opacity] duration-150",
         primary: "bg-primary text-primary-foreground border border-primary hover:bg-primary/90 active:bg-primary/80 active:scale-[0.98] shadow-none",
         destructive: "bg-transparent border border-destructive text-destructive hover:bg-destructive/10 active:bg-destructive/20 active:scale-[0.98]",
+        // Filled destructive: the corner-bracket clip-path (cyberpunk-skewed-sm)
+        // needs an opaque background to read correctly, unlike the outline
+        // `destructive` variant above -- use this pairing on confirm buttons
+        // in destructive-action dialogs (Delete/Unmount), not bordered ones.
+        "destructive-solid": "bg-destructive text-destructive-foreground border border-destructive hover:bg-destructive/90 active:bg-destructive/80 active:scale-[0.98]",
         outline: "bg-transparent border border-border hover:bg-accent hover:text-accent-foreground active:bg-primary/10 active:border-primary/30 active:scale-[0.98]",
         secondary: "bg-transparent text-foreground border border-border hover:bg-accent/50 active:bg-primary/10 active:border-primary/30 active:scale-[0.98]",
         ghost: "border-transparent hover:bg-accent hover:text-accent-foreground active:bg-primary/10 active:scale-[0.98]",

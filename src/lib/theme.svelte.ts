@@ -1,10 +1,12 @@
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { hasDesktopBridge } from './tauri'
+import { applySkin, clearSkin, familyVariant, findPreset } from './themes'
 
 export type Theme = 'system' | 'light' | 'dark'
 
 export const THEME_STORAGE_KEY = 'mountos-desktop-theme'
 const STORAGE_KEY = THEME_STORAGE_KEY
+export const SKIN_STORAGE_KEY = 'mountos-desktop-skin'
 
 function loadTheme(): Theme {
   if (typeof localStorage === 'undefined') return 'system'
@@ -14,6 +16,15 @@ function loadTheme(): Theme {
 
 function saveTheme(theme: Theme) {
   if (typeof localStorage !== 'undefined') localStorage.setItem(STORAGE_KEY, theme)
+}
+
+function loadSkin(): string {
+  if (typeof localStorage === 'undefined') return ''
+  return localStorage.getItem(SKIN_STORAGE_KEY) ?? ''
+}
+
+function saveSkin(skin: string) {
+  if (typeof localStorage !== 'undefined') localStorage.setItem(SKIN_STORAGE_KEY, skin)
 }
 
 function resolveTheme(theme: Theme): 'light' | 'dark' {
@@ -33,6 +44,7 @@ function applyTheme(theme: Theme) {
   const mode = resolveTheme(theme)
   document.documentElement.classList.toggle('dark', mode === 'dark')
   document.documentElement.style.colorScheme = mode
+  applySkinPreset()
   if (hasDesktopBridge()) {
     getCurrentWindow()
       .setTheme(mode)
@@ -40,11 +52,52 @@ function applyTheme(theme: Theme) {
   }
 }
 
+// Reconciles the picked skin against the CURRENT resolved mode (state.
+// resolvedMode is always kept in sync with state.theme before this runs --
+// see setTheme/initThemeSync). A skin's `family` pairs a light/dark variant
+// (e.g. Dracula <-> Alucard) so flipping mode re-derives the matching member
+// instead of showing a light skin's colors under a dark toggle. No family
+// (or no match) falls back to no skin, i.e. this app's own plain palette.
+function applySkinPreset() {
+  if (typeof document === 'undefined') return
+  const mode = state.resolvedMode
+  if (!state.skin) {
+    clearSkin()
+    if (mode === 'dark') {
+      const mountOSDark = findPreset('mountOS Dark')
+      if (mountOSDark) applySkin(mountOSDark.colors, 'dark')
+    }
+    return
+  }
+  let preset = findPreset(state.skin)
+  if (preset && preset.mode !== mode) {
+    const variant = familyVariant(state.skin, mode)
+    if (variant) {
+      preset = variant
+      state.skin = variant.name
+      saveSkin(variant.name)
+    } else {
+      state.skin = ''
+      saveSkin('')
+      clearSkin()
+      return
+    }
+  }
+  if (!preset) {
+    state.skin = ''
+    saveSkin('')
+    clearSkin()
+    return
+  }
+  clearSkin()
+  applySkin(preset.colors, preset.mode)
+}
+
 // Reactive across every component in THIS webview (module-level $state is a
 // singleton). Each of App.svelte/TrayPopover.svelte is its own separate Tauri
 // window/webview though, so this does NOT sync between them on its own --
 // initThemeSync()'s 'storage' listener still does that part, same as before.
-const state = $state({ theme: loadTheme(), resolvedMode: resolveTheme(loadTheme()) })
+const state = $state({ theme: loadTheme(), resolvedMode: resolveTheme(loadTheme()), skin: loadSkin() })
 
 export const themeState = state
 
@@ -53,6 +106,12 @@ export function setTheme(next: Theme) {
   state.resolvedMode = resolveTheme(next)
   saveTheme(next)
   applyTheme(next)
+}
+
+export function setSkin(next: string) {
+  state.skin = next
+  saveSkin(next)
+  applySkinPreset()
 }
 
 // Applies the current theme immediately and wires up the two things that can
@@ -78,8 +137,9 @@ export function initThemeSync(): () => void {
 
   if (typeof window !== 'undefined') {
     const onStorage = (event: StorageEvent) => {
-      if (event.key !== STORAGE_KEY) return
+      if (event.key !== STORAGE_KEY && event.key !== SKIN_STORAGE_KEY) return
       state.theme = loadTheme()
+      state.skin = loadSkin()
       state.resolvedMode = resolveTheme(state.theme)
       applyTheme(state.theme)
     }

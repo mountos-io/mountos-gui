@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { FileArchive, HardDrive, Lightbulb, MonitorDot, Plus, RefreshCw, Settings, Unplug } from '@lucide/svelte'
+  import { Bot, FileArchive, HardDrive, Lightbulb, MonitorDot, Palette, Plus, RefreshCw, Settings, TerminalSquare, Unplug } from '@lucide/svelte'
   import * as Command from '$lib/components/ui/command'
-  import { appState, createBundle, newProfile, refresh, requestUnmountAll, selectProfile, showTips } from '$lib/app-state.svelte'
+  import { appState, createBundle, goToSettingsSection, newProfile, refresh, requestUnmountAll, selectProfile, showTips } from '$lib/app-state.svelte'
   import type { View } from '$lib/app-state.svelte'
 
   let { open = $bindable(false) }: { open?: boolean } = $props()
@@ -32,20 +32,22 @@
       {/each}
     </Command.CommandGroup>
 
-    {#if appState.profiles.length > 0}
-      <Command.CommandSeparator />
-      <Command.CommandGroup heading="Profiles">
-        {#each appState.profiles as profile (profile.id)}
-          <Command.CommandItem
-            value="profile {profile.name}"
-            onSelect={() => run(() => { selectProfile(profile); appState.view = 'profiles' })}
-          >
-            <HardDrive class="mr-2 h-4 w-4" />
-            {profile.name}
-          </Command.CommandItem>
-        {/each}
-      </Command.CommandGroup>
-    {/if}
+    <Command.CommandSeparator />
+
+    <Command.CommandGroup heading="Settings">
+      <Command.CommandItem value="Appearance" keywords={['theme', 'skin', 'dark', 'light', 'colors']} onSelect={() => run(() => goToSettingsSection('settings-appearance'))}>
+        <Palette class="mr-2 h-4 w-4" />
+        Appearance
+      </Command.CommandItem>
+      <Command.CommandItem value="Terminal" keywords={['dashboard', 'shell']} onSelect={() => run(() => goToSettingsSection('settings-terminal'))}>
+        <TerminalSquare class="mr-2 h-4 w-4" />
+        Terminal
+      </Command.CommandItem>
+      <Command.CommandItem value="MCP for AI agents" keywords={['mcp', 'model context protocol', 'ai agent', 'claude', 'codex', 'gemini']} onSelect={() => run(() => goToSettingsSection('settings-mcp'))}>
+        <Bot class="mr-2 h-4 w-4" />
+        MCP for AI agents
+      </Command.CommandItem>
+    </Command.CommandGroup>
 
     <Command.CommandSeparator />
 
@@ -66,7 +68,13 @@
         <Unplug class="mr-2 h-4 w-4" />
         Unmount all
       </Command.CommandItem>
-      <Command.CommandItem value="Create diagnostics bundle" onSelect={() => run(() => createBundle())}>
+      <Command.CommandItem
+        value="Create diagnostics bundle"
+        onSelect={() => run(async () => {
+          await createBundle()
+          await goToSettingsSection('settings-diagnostics-bundle')
+        })}
+      >
         <FileArchive class="mr-2 h-4 w-4" />
         Create diagnostics bundle
       </Command.CommandItem>
@@ -75,5 +83,20 @@
         Tips
       </Command.CommandItem>
     </Command.CommandGroup>
+
+    {#if appState.profiles.length > 0}
+      <Command.CommandSeparator />
+      <Command.CommandGroup heading="Profiles">
+        {#each appState.profiles as profile (profile.id)}
+          <Command.CommandItem
+            value="profile {profile.name}"
+            onSelect={() => run(() => { selectProfile(profile); appState.view = 'profiles' })}
+          >
+            <HardDrive class="mr-2 h-4 w-4" />
+            {profile.name}
+          </Command.CommandItem>
+        {/each}
+      </Command.CommandGroup>
+    {/if}
   </Command.CommandList>
 </Command.CommandDialog>

@@ -1,3 +1,4 @@
+import { tick } from 'svelte'
 import { showErrorToast, showInfoToast, showWarningToast } from './toast.svelte'
 import {
   backendNeedsMountPath,
@@ -119,6 +120,7 @@ const state = $state({
   // require_stable_identity actually locks it.
   selectedProfileSnapshotVolumeKind: undefined as 'general' | 'iceberg' | undefined,
   query: '',
+  profileQuery: '',
   busy: false,
   commandText: '',
   rejectedArgs: [] as string[],
@@ -305,6 +307,15 @@ const filteredInstances = $derived(
 
 const limitedCount = $derived(state.systemState.instances.filter((instance) => instance.health === 'limited').length)
 
+// The selected profile always stays in the list even when it doesn't match
+// the search text -- filtering it out would silently swap what the editor
+// below is showing without any visible cue why it vanished from the list.
+const filteredProfiles = $derived.by(() => {
+  const q = state.profileQuery.trim().toLowerCase()
+  if (!q) return state.profiles
+  return state.profiles.filter((profile) => profile.id === state.selectedProfileId || profile.name.toLowerCase().includes(q))
+})
+
 const backends = $derived<Backend[]>(
   state.systemState.platform === 'windows'
     ? ['auto', 'mountosio', 'cloudfilter']
@@ -353,6 +364,7 @@ export const computed = {
   get gatewayProtocols() { return gatewayProtocols },
   get selectedProfile() { return selectedProfile },
   get filteredInstances() { return filteredInstances },
+  get filteredProfiles() { return filteredProfiles },
   get limitedCount() { return limitedCount },
   get backends() { return backends },
   get mountPathIsManaged() { return mountPathIsManaged },
@@ -1432,6 +1444,17 @@ export function showTips() {
 
 export function hideTips() {
   state.tipsOpen = false
+}
+
+// Jumps to Settings and scrolls the matching section into view. tick() waits
+// for the view swap to actually render before the id exists in the DOM.
+// block: 'nearest' rather than 'start' -- pinning a near-the-bottom section
+// to the viewport top can overscroll past the page's real content, leaving a
+// blank gap below it since there's nothing left to fill the revealed space.
+export async function goToSettingsSection(id: string) {
+  state.view = 'settings'
+  await tick()
+  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
 }
 
 export async function loadSettings() {

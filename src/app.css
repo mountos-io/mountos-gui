@@ -156,7 +156,14 @@
    heading. Mirrors mountos-admin-client's app.css, which already wraps its
    equivalent reset block this same way. */
 @layer base {
+/* Tailwind v4's own preflight defaults every element's border-color to a
+   fixed gray (not this app's --border token) whenever a bare `border`
+   utility is used without an explicit border-{color} class -- invisible in
+   light mode, but reads as a stray white/light border on a dark surface
+   (and the mirror-image dark border in light mode). Pins it to the theme
+   token instead, matching mountos-admin-client's own reset. */
 * {
+  border-color: var(--border);
   box-sizing: border-box;
 }
 

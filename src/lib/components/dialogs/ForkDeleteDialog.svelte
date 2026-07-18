@@ -40,7 +40,7 @@
         </div>
         <Dialog.Footer>
           <Button type="button" variant="outline" onclick={cancelForkDelete}>Cancel</Button>
-          <Button type="submit" variant="destructive" class="cyberpunk-skewed-sm" disabled={appState.forkBusy}>Delete</Button>
+          <Button type="submit" variant="destructive-solid" class="cyberpunk-skewed-sm" disabled={appState.forkBusy}>Delete</Button>
         </Dialog.Footer>
       </form>
     {/if}
