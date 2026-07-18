@@ -5,7 +5,7 @@
   import { Input } from '$lib/components/ui/input'
   import { Label } from '$lib/components/ui/label'
   import { Select } from '$lib/components/ui/select'
-  import Callout from '$lib/components/Callout.svelte'
+  import CliErrorOutput from '$lib/components/CliErrorOutput.svelte'
   import CommandPreview from '$lib/components/CommandPreview.svelte'
   import { appState, buildForkCreateArgv, cancelForkCreate, computed, confirmForkCreate } from '$lib/app-state.svelte'
 
@@ -43,7 +43,11 @@
             </div>
           {/if}
           {#if appState.forkCreateError}
-            <Callout role="alert">{appState.forkCreateError}</Callout>
+            <CliErrorOutput
+              role="alert"
+              text={appState.forkCreateError}
+              command={`mountos ${buildForkCreateArgv(appState.forkCreatePromptFor, appState.forkCreateName.trim() || '<name>', appState.forkCreateParent, computed.forkCreateAsOf).join(' ')}`}
+            />
           {/if}
           <CommandPreview>
             <code>{`mountos ${buildForkCreateArgv(appState.forkCreatePromptFor, appState.forkCreateName.trim() || '<name>', appState.forkCreateParent, computed.forkCreateAsOf).join(' ')}`}</code>

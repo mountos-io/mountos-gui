@@ -105,7 +105,7 @@
     <form class="surface corner-brackets p-4 grid gap-4" onsubmit={(event) => { event.preventDefault(); void persistSelected() }}>
       <div class="flex items-start justify-end gap-4">
         <div class="relative flex flex-wrap items-center gap-2 border border-border/30 p-2 ml-auto">
-          <div class="tech-grid absolute inset-0 pointer-events-none opacity-20" aria-hidden="true"></div>
+          <div class="tech-grid absolute inset-0 pointer-events-none" aria-hidden="true"></div>
           <Button variant="outline" size="icon" class="relative" title="Duplicate profile" aria-label="Duplicate profile" disabled={appState.busy} onclick={duplicateSelected}>
             <Copy size={16} aria-hidden="true" />
           </Button>

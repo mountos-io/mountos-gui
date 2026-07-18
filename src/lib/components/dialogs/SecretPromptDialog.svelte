@@ -4,7 +4,7 @@
   import { Button } from '$lib/components/ui/button'
   import { Input } from '$lib/components/ui/input'
   import { Checkbox } from '$lib/components/ui/checkbox'
-  import Callout from '$lib/components/Callout.svelte'
+  import CliErrorOutput from '$lib/components/CliErrorOutput.svelte'
   import { appState, cancelSecret, computed, doMount } from '$lib/app-state.svelte'
 </script>
 
@@ -29,16 +29,24 @@
             autofocus
             aria-labelledby="secret-value-label"
             aria-invalid={Boolean(appState.secretValue) && Boolean(computed.secretLengthError)}
+            aria-describedby="secret-length-hint"
           />
           <!-- Only once they have typed: the length rule is not news on an empty
-               field, but a disabled Mount with no stated reason is. -->
-          {#if appState.secretValue && computed.secretLengthError}
-            <small class="text-destructive text-sm">{computed.secretLengthError}</small>
-          {/if}
+               field, but a disabled Mount with no stated reason is. Always
+               rendered (block + min-h reserves its line -- min-height is a
+               no-op on the default inline display) rather than conditionally
+               mounted -- toggling this in and out of the DOM on the first
+               keystroke was resizing the whole dialog under the user's cursor.
+               aria-describedby links it to the input unconditionally (harmless
+               empty otherwise) so aria-invalid has a stated reason attached,
+               not just a bare "invalid" with nothing read out. -->
+          <small id="secret-length-hint" class="block text-destructive text-sm min-h-6">
+            {appState.secretValue && computed.secretLengthError ? computed.secretLengthError : ''}
+          </small>
         </div>
         <Checkbox bind:checked={appState.savePromptedSecret} label="Store in OS vault for this profile" />
         {#if appState.secretError}
-          <Callout role="alert">{appState.secretError}</Callout>
+          <CliErrorOutput role="alert" text={appState.secretError} command={appState.commandText} />
         {/if}
         <Dialog.Footer class="mt-4">
           <Button type="button" variant="outline" onclick={cancelSecret}>Cancel</Button>

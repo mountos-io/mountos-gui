@@ -5,7 +5,7 @@
   import { Input } from '$lib/components/ui/input'
   import { Label } from '$lib/components/ui/label'
   import { Checkbox } from '$lib/components/ui/checkbox'
-  import Callout from '$lib/components/Callout.svelte'
+  import CliErrorOutput from '$lib/components/CliErrorOutput.svelte'
   import CommandPreview from '$lib/components/CommandPreview.svelte'
   import {
     appState,
@@ -71,7 +71,18 @@
             </div>
           {/if}
           {#if appState.gatewayError}
-            <Callout role="alert">{appState.gatewayError}</Callout>
+            <CliErrorOutput
+              role="alert"
+              text={appState.gatewayError}
+              command={`mountos ${buildGatewayArgv(appState.gatewayPromptFor, {
+                protocols: computed.gatewayProtocols,
+                port: appState.gatewayPort,
+                gatewayOnly: appState.gatewayOnly,
+                noLoopback: appState.gatewayNoLoopback,
+                certPath: appState.gatewayCertPath,
+                keyPath: appState.gatewayKeyPath,
+              }).join(' ')}`}
+            />
           {/if}
           <CommandPreview>
             <code

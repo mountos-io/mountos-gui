@@ -114,6 +114,10 @@ struct MountInstance {
     unc_path: Option<String>,
     version_inode: Option<String>,
     orphaned: Option<bool>,
+    // Not part of `mountos list --json` (confirmed: name/mountPath/fsName/
+    // viewMode/backend/etc only) -- filled in afterward from each instance's
+    // own .mountOS/.config, the same file get_instance_config reads.
+    mount_time: Option<String>,
     external: bool,
     // Id of the saved profile whose mount path matches this mount, if any.
     // external is simply this being absent.
@@ -1437,8 +1441,9 @@ fn parse_instances_value(value: &Value) -> Vec<MountInstance> {
                     .and_then(Value::as_str)
                     .map(ToString::to_string),
                 orphaned,
-                // Both are corrected once the saved profiles are read (see
-                // get_system_state); listing alone cannot know.
+                // All three are filled in / corrected afterward in
+                // get_system_state -- listing alone can't know any of them.
+                mount_time: None,
                 external: true,
                 profile_id: None,
                 health: if orphaned == Some(true) {
@@ -1817,6 +1822,7 @@ fn get_system_state_blocking(app: AppHandle) -> Result<SystemState, DesktopError
             .find(|(_, target)| targets_equal(target, &instance.mount_path))
             .map(|(id, _)| id.clone());
         instance.external = instance.profile_id.is_none();
+        instance.mount_time = read_mount_time(&instance.mount_path);
     }
     let cli_path_alternates = other_cli_paths_on_path(cli_path.as_deref());
     Ok(SystemState {
@@ -2936,6 +2942,21 @@ async fn unmount_all_targets() -> Result<UnmountAllResult, DesktopError> {
     tauri::async_runtime::spawn_blocking(unmount_all_targets_blocking)
         .await
         .map_err(|error| DesktopError::Message(format!("unmount-all task failed: {error}")))?
+}
+
+// Best-effort mountTime read for the instances list poll: every instance
+// gets this on every refresh, so failures (unmounted mid-read, no .config
+// yet, unexpected shape) fall back to None rather than failing the whole
+// list -- an uptime badge that's occasionally missing beats one that takes
+// the entire Instances view down with it.
+fn read_mount_time(mount_path: &str) -> Option<String> {
+    let config_path = PathBuf::from(mount_path).join(".mountOS").join(".config");
+    let bytes = fs::read(&config_path).ok()?;
+    let value: Value = serde_json::from_slice(&bytes).ok()?;
+    value
+        .get("mountTime")
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
 }
 
 // Reads .mountOS/.config directly off disk rather than shelling out — it's

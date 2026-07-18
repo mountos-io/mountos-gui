@@ -32,8 +32,8 @@
 
     <div class="grid gap-3">
       <div class="flex items-center gap-2">
-        <Button type="button" size="sm" variant={appState.licensesKind === 'rust' ? 'default' : 'outline'} onclick={() => setLicensesKind('rust')}>Rust</Button>
-        <Button type="button" size="sm" variant={appState.licensesKind === 'js' ? 'default' : 'outline'} onclick={() => setLicensesKind('js')}>JavaScript</Button>
+        <Button type="button" size="sm" variant={appState.licensesKind === 'rust' ? 'primary' : 'outline'} aria-pressed={appState.licensesKind === 'rust'} onclick={() => setLicensesKind('rust')}>Rust</Button>
+        <Button type="button" size="sm" variant={appState.licensesKind === 'js' ? 'primary' : 'outline'} aria-pressed={appState.licensesKind === 'js'} onclick={() => setLicensesKind('js')}>JavaScript</Button>
       </div>
       <div class="relative">
         <Search size={15} aria-hidden="true" class="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />

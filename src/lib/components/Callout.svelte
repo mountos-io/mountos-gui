@@ -16,7 +16,7 @@
   } = $props()
 </script>
 
-<div class={cn('flex items-center gap-2.5 border border-warning/45 p-2.5 text-warning text-sm', className)} {role}>
-  <AlertTriangle size={17} aria-hidden="true" class="shrink-0" />
-  <span>{@render children()}</span>
+<div class={cn('flex items-start gap-2.5 border border-warning/45 p-2.5 text-warning text-sm', className)} {role}>
+  <AlertTriangle size={17} aria-hidden="true" class="shrink-0 mt-0.5" />
+  <span class="min-w-0 whitespace-pre-wrap break-words">{@render children()}</span>
 </div>

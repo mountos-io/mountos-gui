@@ -3,10 +3,24 @@ import { hasDesktopBridge } from './tauri'
 import { applySkin, clearSkin, familyVariant, findPreset } from './themes'
 
 export type Theme = 'system' | 'light' | 'dark'
+export type FontSize = 'standard' | 'medium' | 'large' | 'extra-large' | 'jumbo'
 
 export const THEME_STORAGE_KEY = 'mountos-desktop-theme'
 const STORAGE_KEY = THEME_STORAGE_KEY
 export const SKIN_STORAGE_KEY = 'mountos-desktop-skin'
+export const FONT_SIZE_STORAGE_KEY = 'mountos-desktop-font-size'
+export const GRAYSCALE_STORAGE_KEY = 'mountos-desktop-grayscale'
+export const BRIGHTNESS_STORAGE_KEY = 'mountos-desktop-brightness'
+
+// Percentage on <html>'s own font-size (not a rem/px constant), so every
+// Tailwind rem-based size in the app scales proportionally with it.
+export const FONT_SCALE: Record<FontSize, string> = {
+  standard: '100%',
+  medium: '112.5%',
+  large: '125%',
+  'extra-large': '137.5%',
+  jumbo: '150%',
+}
 
 function loadTheme(): Theme {
   if (typeof localStorage === 'undefined') return 'system'
@@ -27,6 +41,51 @@ function saveSkin(skin: string) {
   if (typeof localStorage !== 'undefined') localStorage.setItem(SKIN_STORAGE_KEY, skin)
 }
 
+function loadFontSize(): FontSize {
+  if (typeof localStorage === 'undefined') return 'standard'
+  const stored = localStorage.getItem(FONT_SIZE_STORAGE_KEY)
+  return stored && stored in FONT_SCALE ? (stored as FontSize) : 'standard'
+}
+
+function saveFontSize(fontSize: FontSize) {
+  if (typeof localStorage !== 'undefined') localStorage.setItem(FONT_SIZE_STORAGE_KEY, fontSize)
+}
+
+function loadGrayscale(): boolean {
+  if (typeof localStorage === 'undefined') return false
+  return localStorage.getItem(GRAYSCALE_STORAGE_KEY) === 'true'
+}
+
+function saveGrayscale(grayscale: boolean) {
+  if (typeof localStorage !== 'undefined') localStorage.setItem(GRAYSCALE_STORAGE_KEY, String(grayscale))
+}
+
+function loadBrightness(): number {
+  if (typeof localStorage === 'undefined') return 100
+  const stored = Number(localStorage.getItem(BRIGHTNESS_STORAGE_KEY))
+  return Number.isFinite(stored) && stored >= 50 && stored <= 150 ? stored : 100
+}
+
+function saveBrightness(brightness: number) {
+  if (typeof localStorage !== 'undefined') localStorage.setItem(BRIGHTNESS_STORAGE_KEY, String(brightness))
+}
+
+function applyFontSize(fontSize: FontSize) {
+  if (typeof document === 'undefined') return
+  document.documentElement.style.fontSize = FONT_SCALE[fontSize]
+}
+
+// Grayscale and brightness are blunt document-wide filters, not OKLCH
+// adjustments to the active skin -- they're meant to layer on top of
+// whichever skin is picked, not reinterpret its colors.
+function applyFilters() {
+  if (typeof document === 'undefined') return
+  const parts: string[] = []
+  if (state.grayscale) parts.push('grayscale(1)')
+  if (state.brightness !== 100) parts.push(`brightness(${state.brightness / 100})`)
+  document.documentElement.style.filter = parts.length ? parts.join(' ') : ''
+}
+
 function resolveTheme(theme: Theme): 'light' | 'dark' {
   if (theme === 'system') {
     return typeof matchMedia !== 'undefined' && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
@@ -39,6 +98,12 @@ function resolveTheme(theme: Theme): 'light' | 'dark' {
 // Also pushes the resolved mode to the native window (setTheme) -- without
 // this, macOS keeps the titlebar/traffic-lights on the OS-level appearance,
 // which can go native-dark against light webview content (or vice versa).
+// Passing null (not a resolved mode) for 'system' is required, not cosmetic:
+// on macOS, Window.setTheme forwards to `[NSApp setAppearance:]` -- app-wide,
+// not per-window -- so a concrete value pins prefers-color-scheme for every
+// webview in the process, permanently, until something un-pins it. Only null
+// clears that override and lets the OS appearance (and this webview's own
+// matchMedia read below) actually follow the system again.
 function applyTheme(theme: Theme) {
   if (typeof document === 'undefined') return
   const mode = resolveTheme(theme)
@@ -47,7 +112,7 @@ function applyTheme(theme: Theme) {
   applySkinPreset()
   if (hasDesktopBridge()) {
     getCurrentWindow()
-      .setTheme(mode)
+      .setTheme(theme === 'system' ? null : mode)
       .catch(() => {})
   }
 }
@@ -97,7 +162,14 @@ function applySkinPreset() {
 // singleton). Each of App.svelte/TrayPopover.svelte is its own separate Tauri
 // window/webview though, so this does NOT sync between them on its own --
 // initThemeSync()'s 'storage' listener still does that part, same as before.
-const state = $state({ theme: loadTheme(), resolvedMode: resolveTheme(loadTheme()), skin: loadSkin() })
+const state = $state({
+  theme: loadTheme(),
+  resolvedMode: resolveTheme(loadTheme()),
+  skin: loadSkin(),
+  fontSize: loadFontSize(),
+  grayscale: loadGrayscale(),
+  brightness: loadBrightness(),
+})
 
 export const themeState = state
 
@@ -114,12 +186,32 @@ export function setSkin(next: string) {
   applySkinPreset()
 }
 
+export function setFontSize(next: FontSize) {
+  state.fontSize = next
+  saveFontSize(next)
+  applyFontSize(next)
+}
+
+export function setGrayscale(next: boolean) {
+  state.grayscale = next
+  saveGrayscale(next)
+  applyFilters()
+}
+
+export function setBrightness(next: number) {
+  state.brightness = Math.max(50, Math.min(150, next))
+  saveBrightness(state.brightness)
+  applyFilters()
+}
+
 // Applies the current theme immediately and wires up the two things that can
 // change it without a local setTheme() call: the OS appearance (when
 // following "system") and another window writing THEME_STORAGE_KEY. Call
 // once per window (App.svelte's root shell, TrayPopover.svelte).
 export function initThemeSync(): () => void {
   applyTheme(state.theme)
+  applyFontSize(state.fontSize)
+  applyFilters()
 
   const cleanups: Array<() => void> = []
 
@@ -137,6 +229,17 @@ export function initThemeSync(): () => void {
 
   if (typeof window !== 'undefined') {
     const onStorage = (event: StorageEvent) => {
+      if (event.key === FONT_SIZE_STORAGE_KEY) {
+        state.fontSize = loadFontSize()
+        applyFontSize(state.fontSize)
+        return
+      }
+      if (event.key === GRAYSCALE_STORAGE_KEY || event.key === BRIGHTNESS_STORAGE_KEY) {
+        state.grayscale = loadGrayscale()
+        state.brightness = loadBrightness()
+        applyFilters()
+        return
+      }
       if (event.key !== STORAGE_KEY && event.key !== SKIN_STORAGE_KEY) return
       state.theme = loadTheme()
       state.skin = loadSkin()

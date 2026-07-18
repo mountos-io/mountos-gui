@@ -6,7 +6,7 @@
   import { Label } from '$lib/components/ui/label'
   import { Select } from '$lib/components/ui/select'
   import DateTimePicker from '$lib/components/shared/DateTimePicker.svelte'
-  import Callout from '$lib/components/Callout.svelte'
+  import CliErrorOutput from '$lib/components/CliErrorOutput.svelte'
   import CommandPreview from '$lib/components/CommandPreview.svelte'
   import {
     appState,
@@ -65,7 +65,11 @@
             </div>
           {/if}
           {#if appState.snapshotError}
-            <Callout role="alert">{appState.snapshotError}</Callout>
+            <CliErrorOutput
+              role="alert"
+              text={appState.snapshotError}
+              command={`mountos ${buildSnapshotArgv(appState.snapshotPromptFor, appState.snapshotDestination || '<destination>', computed.snapshotTimestampValue || '<timestamp>').join(' ')}`}
+            />
           {/if}
           <CommandPreview>
             <code>{`mountos ${buildSnapshotArgv(appState.snapshotPromptFor, appState.snapshotDestination || '<destination>', computed.snapshotTimestampValue || '<timestamp>').join(' ')}`}</code>

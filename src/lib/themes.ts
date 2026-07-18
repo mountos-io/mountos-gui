@@ -33,39 +33,44 @@ export const themePresets: ThemePreset[] = [
   {
     // This app's own default palette (app.css :root) -- picking it is an
     // identity operation, not a real skin swap.
+    // Verbatim from admin-client's themes.ts -- its "mountOS Light/Dark"
+    // presets are NOT the same as its own app.css base tokens (confirmed by
+    // direct comparison: base .dark background is L 0.07, this preset is L
+    // 0.239), so matching admin-client requires copying these preset values
+    // exactly rather than substituting this app's own base tokens as an
+    // "identity" skin -- that substitution was the bug (gui rendered
+    // noticeably darker than admin-client's actual default).
     name: 'mountOS Light',
     family: '',
     mode: 'light',
     colors: {
-      background: 'oklch(0.95 0.02 94.63)',
-      cardBg: 'oklch(0.96 0.025 94.63)',
-      textPrimary: 'oklch(0.12 0 0)',
-      textSecondary: 'oklch(0.42 0.05 70)',
-      primary: 'oklch(0.54 0.14 39)',
-      accentBlue: 'oklch(0.54 0.14 39)',
-      accentGreen: 'oklch(0.49 0.17 155)',
-      dangerRed: 'oklch(0.54 0.24 24.42)',
-      warningYellow: 'oklch(0.45 0.16 55)',
-      border: 'oklch(0.88 0 0)',
+      background: 'oklch(0.976 0.012 91.5)',
+      cardBg: 'oklch(0.958 0.018 92.7)',
+      textPrimary: 'oklch(0.203 0.010 67.2)',
+      textSecondary: 'oklch(0.493 0.025 69.4)',
+      primary: 'oklch(0.573 0.112 39.3)',
+      accentBlue: 'oklch(0.592 0.124 249.3)',
+      accentGreen: 'oklch(0.577 0.109 154.8)',
+      dangerRed: 'oklch(0.505 0.167 30.7)',
+      warningYellow: 'oklch(0.566 0.106 75.3)',
+      border: 'oklch(0.883 0.017 88.0)',
     },
   },
   {
-    // This app's own default palette (app.css .dark) -- picking it is an
-    // identity operation, not a real skin swap.
     name: 'mountOS Dark',
     family: '',
     mode: 'dark',
     colors: {
-      background: 'oklch(0.07 0.005 200)',
-      cardBg: 'oklch(0.03 0 0)',
-      textPrimary: 'oklch(0.93 0.005 200)',
-      textSecondary: 'oklch(0.58 0.01 200)',
-      primary: 'oklch(0.78 0.13 92)',
-      accentBlue: 'oklch(0.78 0.13 92)',
-      accentGreen: 'oklch(0.65 0.19 155)',
-      dangerRed: 'oklch(0.59 0.2 21)',
-      warningYellow: 'oklch(0.78 0.15 75)',
-      border: 'oklch(0.21 0.008 200)',
+      background: 'oklch(0.239 0 89.9)',
+      cardBg: 'oklch(0.213 0 89.9)',
+      textPrimary: 'oklch(0.961 0 89.9)',
+      textSecondary: 'oklch(0.640 0 89.9)',
+      primary: 'oklch(0.739 0.111 91.7)',
+      accentBlue: 'oklch(0.728 0.119 233.6)',
+      accentGreen: 'oklch(0.761 0.135 163.3)',
+      dangerRed: 'oklch(0.606 0.110 25.1)',
+      warningYellow: 'oklch(0.818 0.137 90.0)',
+      border: 'oklch(0.321 0 89.9)',
     },
   },
   {

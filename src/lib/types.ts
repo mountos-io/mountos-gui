@@ -69,6 +69,8 @@ export interface MountInstance {
   uncPath?: string
   versionInode?: string
   orphaned?: boolean
+  /** ISO timestamp from this instance's own .mountOS/.config, read fresh on every poll. */
+  mountTime?: string
   external: boolean
   /** Saved profile matching this mount's path, if any. `external` is this being absent. */
   profileId?: string

@@ -6,6 +6,7 @@
   import { Label } from '$lib/components/ui/label'
   import { Checkbox } from '$lib/components/ui/checkbox'
   import Callout from '$lib/components/Callout.svelte'
+  import CliErrorOutput from '$lib/components/CliErrorOutput.svelte'
   import CommandPreview from '$lib/components/CommandPreview.svelte'
   import { appState, buildForkDeleteArgv, cancelForkDelete, computed, confirmForkDelete } from '$lib/app-state.svelte'
 
@@ -32,7 +33,11 @@
             </div>
           {/if}
           {#if appState.forkDeleteError}
-            <Callout role="alert">{appState.forkDeleteError}</Callout>
+            <CliErrorOutput
+              role="alert"
+              text={appState.forkDeleteError}
+              command={`mountos ${buildForkDeleteArgv(profile, appState.forkDeletePromptFor.name, appState.forkDeleteForce).join(' ')}`}
+            />
           {/if}
           <CommandPreview>
             <code>{`mountos ${buildForkDeleteArgv(profile, appState.forkDeletePromptFor.name, appState.forkDeleteForce).join(' ')}`}</code>

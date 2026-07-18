@@ -70,3 +70,25 @@ export function volumeKindBadgeStyle(kind?: string): string {
 function pastelBadgeStyle(tone: string): string {
   return `background: transparent; color: var(--pastel-${tone}-text); border-color: oklch(from var(--pastel-${tone}) l c h / 0.3);`
 }
+
+/**
+ * "Up 2h 14m" style duration since `mountTime`, or undefined when it's
+ * missing/unparseable (older CLI, config not written yet). Recomputed on
+ * every poll tick rather than ticking live on its own timer -- the row
+ * already re-renders on the same cadence, and a frozen value between polls
+ * (or while polling is off) matches how every other field in this row
+ * already behaves without a fetch.
+ */
+export function formatUptime(mountTime?: string): string | undefined {
+  if (!mountTime) return undefined
+  const started = Date.parse(mountTime)
+  if (Number.isNaN(started)) return undefined
+  const totalMinutes = Math.max(0, Math.floor((Date.now() - started) / 60_000))
+  if (totalMinutes < 1) return 'just now'
+  const days = Math.floor(totalMinutes / 1440)
+  const hours = Math.floor((totalMinutes % 1440) / 60)
+  const minutes = totalMinutes % 60
+  if (days > 0) return `${days}d ${hours}h`
+  if (hours > 0) return `${hours}h ${minutes}m`
+  return `${minutes}m`
+}

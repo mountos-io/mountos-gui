@@ -5,7 +5,7 @@
   import { Input } from '$lib/components/ui/input'
   import { Label } from '$lib/components/ui/label'
   import { Select } from '$lib/components/ui/select'
-  import Callout from '$lib/components/Callout.svelte'
+  import CliErrorOutput from '$lib/components/CliErrorOutput.svelte'
   import CommandPreview from '$lib/components/CommandPreview.svelte'
   import InfoTip from '$lib/components/shared/InfoTip.svelte'
   import {
@@ -62,7 +62,11 @@
             </div>
           {/if}
           {#if appState.versionError}
-            <Callout role="alert">{appState.versionError}</Callout>
+            <CliErrorOutput
+              role="alert"
+              text={appState.versionError}
+              command={`mountos ${buildVersionArgv(appState.versionPromptFor, appState.versionDestination || '<destination>', appState.versionInode.trim() || '<inode>', appState.versionFormat, appState.versionIdleTimeout).join(' ')}`}
+            />
           {/if}
           <CommandPreview>
             <code>{`mountos ${buildVersionArgv(appState.versionPromptFor, appState.versionDestination || '<destination>', appState.versionInode.trim() || '<inode>', appState.versionFormat, appState.versionIdleTimeout).join(' ')}`}</code>

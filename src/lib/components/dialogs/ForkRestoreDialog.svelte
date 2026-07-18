@@ -4,7 +4,7 @@
   import { Button } from '$lib/components/ui/button'
   import { Input } from '$lib/components/ui/input'
   import { Label } from '$lib/components/ui/label'
-  import Callout from '$lib/components/Callout.svelte'
+  import CliErrorOutput from '$lib/components/CliErrorOutput.svelte'
   import CommandPreview from '$lib/components/CommandPreview.svelte'
   import { appState, buildForkRestoreArgv, cancelForkRestore, computed, confirmForkRestore } from '$lib/app-state.svelte'
 
@@ -27,7 +27,11 @@
             </div>
           {/if}
           {#if appState.forkRestoreError}
-            <Callout role="alert">{appState.forkRestoreError}</Callout>
+            <CliErrorOutput
+              role="alert"
+              text={appState.forkRestoreError}
+              command={`mountos ${buildForkRestoreArgv(profile, appState.forkRestorePromptFor.name).join(' ')}`}
+            />
           {/if}
           <CommandPreview>
             <code>{`mountos ${buildForkRestoreArgv(profile, appState.forkRestorePromptFor.name).join(' ')}`}</code>

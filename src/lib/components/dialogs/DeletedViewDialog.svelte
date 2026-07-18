@@ -6,7 +6,7 @@
   import { Label } from '$lib/components/ui/label'
   import { Select } from '$lib/components/ui/select'
   import DateTimePicker from '$lib/components/shared/DateTimePicker.svelte'
-  import Callout from '$lib/components/Callout.svelte'
+  import CliErrorOutput from '$lib/components/CliErrorOutput.svelte'
   import CommandPreview from '$lib/components/CommandPreview.svelte'
   import {
     appState,
@@ -70,7 +70,11 @@
             </div>
           {/if}
           {#if appState.deletedError}
-            <Callout role="alert">{appState.deletedError}</Callout>
+            <CliErrorOutput
+              role="alert"
+              text={appState.deletedError}
+              command={`mountos ${buildDeletedArgv(appState.deletedPromptFor, appState.deletedDestination || '<destination>', computed.deletedFromValue, appState.deletedIdleTimeout).join(' ')}`}
+            />
           {/if}
           <CommandPreview>
             <code>{`mountos ${buildDeletedArgv(appState.deletedPromptFor, appState.deletedDestination || '<destination>', computed.deletedFromValue, appState.deletedIdleTimeout).join(' ')}`}</code>

@@ -208,6 +208,13 @@ h3 {
   line-height: 1.2;
 }
 
+/* Field-label <strong> tags throughout Settings/dialogs otherwise fall back
+   to the UA default (font-weight: bolder -> 700), a visibly heavier weight
+   than every other emphasis in the app. */
+strong {
+  font-weight: 500;
+}
+
 p {
   margin: 0;
   color: var(--muted-foreground);

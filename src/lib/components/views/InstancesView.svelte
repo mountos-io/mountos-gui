@@ -21,7 +21,8 @@
   import { Input } from '$lib/components/ui/input'
   import { Skeleton } from '$lib/components/ui/skeleton'
   import GatewayLaunchesPanel from '$lib/components/GatewayLaunchesPanel.svelte'
-  import { backendBadgeStyle, healthTitle, healthTone, viewModeBadge, volumeKindBadgeStyle } from '$lib/health'
+  import InstanceConfigPanel from '$lib/components/InstanceConfigPanel.svelte'
+  import { backendBadgeStyle, formatUptime, healthTitle, healthTone, viewModeBadge, volumeKindBadgeStyle } from '$lib/health'
   import type { MountInstance } from '$lib/types'
   import {
     appState,
@@ -45,12 +46,16 @@
 </script>
 
 <div class="corner-brackets relative border border-border/30 m-[22px] mb-0 p-4">
-  <div class="tech-grid absolute inset-0 pointer-events-none opacity-20" aria-hidden="true"></div>
+  <div class="tech-grid absolute inset-0 pointer-events-none" aria-hidden="true"></div>
   <div class="relative flex flex-wrap items-center justify-between gap-3">
     <label class="relative flex items-center max-w-sm">
       <Search size={16} aria-hidden="true" class="absolute left-3 text-muted-foreground" />
       <span class="sr-only">Search instances</span>
-      <Input bind:value={appState.query} placeholder="Filter mounts" class="pl-9" />
+      <!-- dark:bg-background overrides the Input component's own dark:bg-input/20:
+           that low-alpha fill is fine over a plain surface, but here it sits
+           directly on top of the tech-grid overlay two levels up, so the grid
+           pattern shows straight through and the field stops reading as a box. -->
+      <Input bind:value={appState.query} placeholder="Filter mounts" class="pl-9 dark:bg-background" />
     </label>
     <div class="flex flex-wrap items-center gap-2">
       <Badge>{appState.systemState.instances.length} running</Badge>
@@ -111,6 +116,9 @@
                 {/if}
                 {#if gatewayInfoForInstance(instance)}
                   <Badge title="This mount also has an S3/HDFS gateway running, launched from this app">Gateway</Badge>
+                {/if}
+                {#if formatUptime(instance.mountTime)}
+                  <Badge variant="secondary" title={`Mounted at ${new Date(instance.mountTime!).toLocaleString()}`}>Up {formatUptime(instance.mountTime)}</Badge>
                 {/if}
               </span>
             </Table.Cell>
@@ -230,15 +238,7 @@
           {#if instance.key in appState.expandedConfig}
             <Table.Row>
               <Table.Cell colspan={4} class="bg-muted">
-                <div class="grid gap-2 overflow-auto border border-border bg-card p-2.5">
-                  <div class="flex items-center justify-between gap-2.5">
-                    <p class="mono-label">MOUNT FLAGS (.mountOS/.config)</p>
-                    <Button variant="outline" size="icon" title="Copy mount flags" aria-label="Copy mount flags" onclick={() => copyConfig(instance.key)}>
-                      <Copy size={16} aria-hidden="true" />
-                    </Button>
-                  </div>
-                  <pre class="m-0 whitespace-pre-wrap break-words"><code>{appState.expandedConfig[instance.key]}</code></pre>
-                </div>
+                <InstanceConfigPanel raw={appState.expandedConfig[instance.key]} onCopy={() => copyConfig(instance.key)} />
               </Table.Cell>
             </Table.Row>
           {/if}

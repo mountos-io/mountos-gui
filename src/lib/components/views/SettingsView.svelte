@@ -10,8 +10,8 @@
   import Callout from '$lib/components/Callout.svelte'
   import CommandPreview from '$lib/components/CommandPreview.svelte'
   import InfoTip from '$lib/components/shared/InfoTip.svelte'
-  import { themeState, setTheme, setSkin } from '$lib/theme.svelte'
-  import type { Theme } from '$lib/theme.svelte'
+  import { themeState, setTheme, setSkin, setFontSize, setGrayscale, setBrightness } from '$lib/theme.svelte'
+  import type { Theme, FontSize } from '$lib/theme.svelte'
   import { presetsForMode, defaultSkin } from '$lib/themes'
   import type { Backend } from '$lib/types'
   import {
@@ -39,6 +39,14 @@
     { value: 'light', label: 'Light', icon: Sun },
     { value: 'dark', label: 'Dark', icon: Moon },
     { value: 'system', label: 'System', icon: Monitor },
+  ]
+
+  const fontSizeOptions: Array<{ value: FontSize; label: string }> = [
+    { value: 'standard', label: 'Standard' },
+    { value: 'medium', label: 'Medium' },
+    { value: 'large', label: 'Large' },
+    { value: 'extra-large', label: 'Extra Large' },
+    { value: 'jumbo', label: 'Jumbo' },
   ]
 
   const backendOptions = $derived(computed.backends.map((backend) => ({ value: backend, label: backend })))
@@ -94,6 +102,41 @@
             <span class="sw-label">{isDefault ? 'mountOS' : preset.name.replace(/ (Light|Dark)$/, '')}</span>
           </button>
         {/each}
+      </div>
+    </div>
+    <div class="grid gap-1.5">
+      <span class="inline-flex items-center gap-1"><strong>Font size</strong><InfoTip text="Scales all text in the app." /></span>
+      <div class="flex flex-wrap gap-1.5" role="group" aria-label="Font size">
+        {#each fontSizeOptions as option (option.value)}
+          <Button type="button" size="sm" variant={themeState.fontSize === option.value ? 'primary' : 'outline'} aria-pressed={themeState.fontSize === option.value} onclick={() => setFontSize(option.value)}>
+            {option.label}
+          </Button>
+        {/each}
+      </div>
+    </div>
+    <div class="flex items-center justify-between gap-4">
+      <span class="inline-flex items-center gap-1"><strong>Grayscale</strong><InfoTip text="Reduces color for low-light comfort." /></span>
+      <Checkbox checked={themeState.grayscale} onchange={(e) => setGrayscale(e.currentTarget.checked)} />
+    </div>
+    <div class="grid gap-1.5">
+      <div class="flex items-center justify-between gap-4">
+        <span class="inline-flex items-center gap-1"><strong>Brightness</strong><InfoTip text="Dims or brightens the whole app." /></span>
+        <span class="mono-label">{themeState.brightness}%</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <input
+          type="range"
+          min="50"
+          max="150"
+          step="5"
+          value={themeState.brightness}
+          oninput={(e) => setBrightness(Number(e.currentTarget.value))}
+          aria-label="Brightness"
+          class="w-full accent-primary"
+        />
+        {#if themeState.brightness !== 100}
+          <Button type="button" size="sm" variant="ghost" onclick={() => setBrightness(100)}>Reset</Button>
+        {/if}
       </div>
     </div>
   </div>

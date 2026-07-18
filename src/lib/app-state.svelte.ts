@@ -343,7 +343,7 @@ const mountPathError = $derived.by(() => {
 // the mount for a reason the dialog said was fine.
 const trimmedSecret = $derived(state.secretValue.trim())
 const secretLengthError = $derived(
-  trimmedSecret.length === SECRET_ACCESS_KEY_LENGTH ? '' : `Secret access key must be ${SECRET_ACCESS_KEY_LENGTH} characters (${trimmedSecret.length} so far)`,
+  trimmedSecret.length === SECRET_ACCESS_KEY_LENGTH ? '' : `Secret access key must be ${SECRET_ACCESS_KEY_LENGTH} characters`,
 )
 
 const accessKeyError = $derived.by(() => {
