@@ -297,11 +297,13 @@
     color: var(--bracket-hover-dark);
   }
 
-  /* Technical grid pattern background */
+  /* Technical grid pattern background -- a subtle texture, not a real grid:
+     --grid-line has no opacity of its own (its other uses, as an actual
+     border, want full strength), so it's dampened here specifically. */
   .tech-grid {
     background-image:
-      linear-gradient(var(--grid-line) 1px, transparent 1px),
-      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+      linear-gradient(oklch(from var(--grid-line) l c h / 0.08) 1px, transparent 1px),
+      linear-gradient(90deg, oklch(from var(--grid-line) l c h / 0.08) 1px, transparent 1px);
     background-size: 20px 20px;
     background-position: -1px -1px;
   }

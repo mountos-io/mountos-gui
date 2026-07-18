@@ -380,6 +380,18 @@ export const computed = {
 let knownInstances = new Map<string, string>()
 const expectedGone = new Set<string>()
 
+// Extra guard on top of expectedGone's exact-key tracking: a poll can still
+// land at an awkward moment relative to an in-flight app-initiated unmount,
+// so also blanket-suppress the "disappeared" notice for a short window right
+// after ANY unmount this app started, rather than relying solely on precise
+// key bookkeeping.
+const UNMOUNT_GRACE_MS = 5000
+let unmountGraceUntil = 0
+
+function markUnmountInFlight() {
+  unmountGraceUntil = Date.now() + UNMOUNT_GRACE_MS
+}
+
 export function notify(text: string, kind: 'info' | 'warn' | 'error' = 'info') {
   if (kind === 'error') showErrorToast(text)
   else if (kind === 'warn') showWarningToast(text, NOTICE_AUTO_DISMISS_MS)
@@ -393,13 +405,15 @@ export function describeError(error: unknown) {
 
 function detectLost(next: SystemState) {
   const nextInstances = new Map(next.instances.map((instance) => [instance.key, instance.mountPath || instance.name]))
+  const inUnmountGrace = Date.now() < unmountGraceUntil
   for (const [key, label] of knownInstances) {
     if (nextInstances.has(key)) continue
     if (expectedGone.delete(key)) continue
+    if (inUnmountGrace) continue
     // Not an error: expectedGone already absorbed the unmounts this app did,
     // so reaching here means the mount went away on its own (CLI unmount,
     // daemon exit). Worth saying once, not worth an alert that sticks.
-    notify(`Mount disappeared: ${label}`, 'warn')
+    notify(`Unmounted: ${label}`, 'warn')
   }
   knownInstances = nextInstances
 }
@@ -1304,6 +1318,7 @@ export async function openBundle() {
 export async function runUnmount(instance: MountInstance) {
   state.busy = true
   expectedGone.add(instance.key)
+  markUnmountInFlight()
   try {
     const result = await unmountTarget(instance.domainId || instance.mountPath)
     await refresh(false)
@@ -1321,6 +1336,7 @@ export async function runUnmountAll() {
   if (keys.length === 0) return
   state.busy = true
   for (const key of keys) expectedGone.add(key)
+  markUnmountInFlight()
   try {
     const result = await unmountAllTargets()
     for (const failedTarget of result.failed) expectedGone.delete(failedTarget)

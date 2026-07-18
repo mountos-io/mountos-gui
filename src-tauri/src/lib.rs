@@ -2879,16 +2879,34 @@ fn unmount_all_targets_blocking() -> Result<UnmountAllResult, DesktopError> {
     let _ = Command::new(mountos_path()?)
         .args(["unmount", "--all", "-y"])
         .output()?;
-    let after = list_active_targets()?;
-    let failed: Vec<String> = before
-        .iter()
-        .filter(|target| after.iter().any(|remaining| remaining == *target))
-        .cloned()
-        .collect();
+    let failed = poll_unmount_all(&before, UNMOUNT_TIMEOUT)?;
     Ok(UnmountAllResult {
         attempted: before.len(),
         failed,
     })
+}
+
+// Unlike a single unmount_target (one poll_target call), --all's per-mount
+// teardown can straggle -- some targets finish flushing sooner than others.
+// Re-listing once immediately after the CLI process exits raced the
+// still-in-progress unmounts and reported every target as failed even though
+// they all cleared moments later. Poll the whole list instead, the same
+// 500ms-interval/timeout shape as poll_target, until none of `before`'s
+// targets remain (or the timeout elapses).
+fn poll_unmount_all(before: &[String], timeout: Duration) -> Result<Vec<String>, DesktopError> {
+    let started = Instant::now();
+    loop {
+        let after = list_active_targets()?;
+        let remaining: Vec<String> = before
+            .iter()
+            .filter(|target| after.iter().any(|candidate| candidate == *target))
+            .cloned()
+            .collect();
+        if remaining.is_empty() || started.elapsed() >= timeout {
+            return Ok(remaining);
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
 }
 
 #[tauri::command]
