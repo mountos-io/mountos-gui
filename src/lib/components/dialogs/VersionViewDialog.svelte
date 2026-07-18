@@ -7,6 +7,7 @@
   import { Select } from '$lib/components/ui/select'
   import Callout from '$lib/components/Callout.svelte'
   import CommandPreview from '$lib/components/CommandPreview.svelte'
+  import InfoTip from '$lib/components/shared/InfoTip.svelte'
   import {
     appState,
     browseVersionDestination,
@@ -31,9 +32,9 @@
         <div class="grid gap-4 py-4">
           <p>Mounts a read-only timeline of every version of one file from this profile's volume ("{appState.versionPromptFor.volume || appState.versionPromptFor.name}") at a folder you choose. It appears as its own row once ready.</p>
           <div class="grid gap-1.5">
-            <Label>Destination folder</Label>
+            <Label>Destination folder (optional)</Label>
             <div class="flex gap-2">
-              <Input value={appState.versionDestination} readonly placeholder="Choose a folder" class="flex-1" />
+              <Input value={appState.versionDestination} readonly placeholder="Auto-generated in a temp folder" class="flex-1" />
               <Button type="button" onclick={browseVersionDestination} disabled={appState.busy} title="Choose a folder" class="shrink-0">
                 <FolderOpen size={16} aria-hidden="true" />
                 Browse
@@ -42,9 +43,8 @@
           </div>
           <div class="grid grid-cols-2 gap-4">
             <div class="grid gap-1.5">
-              <Label for="version-inode">Inode number</Label>
+              <span class="inline-flex items-center gap-1"><Label for="version-inode">Inode number</Label><InfoTip text="**ls -i** shows a file's inode." /></span>
               <Input id="version-inode" bind:value={appState.versionInode} inputmode="numeric" placeholder="12345" />
-              <small class="text-muted-foreground text-sm">Find the inode via <code>mountos ls -i</code> or similar CLI tooling; file browsing isn't part of this app yet.</small>
             </div>
             <div class="grid gap-1.5">
               <Label id="version-format-label">Version naming</Label>
@@ -69,8 +69,8 @@
           </CommandPreview>
         </div>
         <Dialog.Footer>
-          <Button type="button" variant="outline" class="cyberpunk-skewed-sm" onclick={cancelVersionPrompt}>Cancel</Button>
-          <Button type="submit" variant="primary" class="cyberpunk-skewed-sm" disabled={appState.busy || !appState.versionDestination || !/^\d+$/.test(appState.versionInode.trim())}>Open</Button>
+          <Button type="button" variant="outline" onclick={cancelVersionPrompt}>Cancel</Button>
+          <Button type="submit" variant="primary" class="cyberpunk-skewed-sm" disabled={appState.busy || !/^\d+$/.test(appState.versionInode.trim())}>Open</Button>
         </Dialog.Footer>
       </form>
     {/if}

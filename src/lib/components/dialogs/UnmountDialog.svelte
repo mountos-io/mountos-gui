@@ -21,7 +21,7 @@
           <p class="py-4">Unmount "{appState.unmountPromptFor.name || appState.unmountPromptFor.mountPath}"? It stops flushing in the background once unmounted.</p>
         {/if}
         <Dialog.Footer>
-          <Button type="button" variant="outline" class="cyberpunk-skewed-sm" onclick={cancelUnmountPrompt}>Cancel</Button>
+          <Button type="button" variant="outline" onclick={cancelUnmountPrompt}>Cancel</Button>
           <Button type="submit" variant="destructive" class="cyberpunk-skewed-sm" disabled={appState.busy}>Unmount</Button>
         </Dialog.Footer>
       </form>

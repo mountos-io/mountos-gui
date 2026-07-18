@@ -34,9 +34,9 @@
         <div class="grid gap-4 py-4">
           <p>Mounts a flat, read-only listing of deleted files from this profile's volume ("{appState.deletedPromptFor.volume || appState.deletedPromptFor.name}") at a folder you choose. It appears as its own row once ready.</p>
           <div class="grid gap-1.5">
-            <Label>Destination folder</Label>
+            <Label>Destination folder (optional)</Label>
             <div class="flex gap-2">
-              <Input value={appState.deletedDestination} readonly placeholder="Choose a folder" class="flex-1" />
+              <Input value={appState.deletedDestination} readonly placeholder="Auto-generated in a temp folder" class="flex-1" />
               <Button type="button" onclick={browseDeletedDestination} disabled={appState.busy} title="Choose a folder" class="shrink-0">
                 <FolderOpen size={16} aria-hidden="true" />
                 Browse
@@ -77,8 +77,8 @@
           </CommandPreview>
         </div>
         <Dialog.Footer>
-          <Button type="button" variant="outline" class="cyberpunk-skewed-sm" onclick={cancelDeletedPrompt}>Cancel</Button>
-          <Button type="submit" variant="primary" class="cyberpunk-skewed-sm" disabled={appState.busy || !appState.deletedDestination}>Open</Button>
+          <Button type="button" variant="outline" onclick={cancelDeletedPrompt}>Cancel</Button>
+          <Button type="submit" variant="primary" class="cyberpunk-skewed-sm" disabled={appState.busy}>Open</Button>
         </Dialog.Footer>
       </form>
     {/if}

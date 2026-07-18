@@ -21,7 +21,7 @@
   import { Input } from '$lib/components/ui/input'
   import { Skeleton } from '$lib/components/ui/skeleton'
   import GatewayLaunchesPanel from '$lib/components/GatewayLaunchesPanel.svelte'
-  import { backendBadgeStyle, healthTitle, healthTone, viewModeBadge } from '$lib/health'
+  import { backendBadgeStyle, healthTitle, healthTone, viewModeBadge, volumeKindBadgeStyle } from '$lib/health'
   import type { MountInstance } from '$lib/types'
   import {
     appState,
@@ -66,7 +66,7 @@
 </div>
 
 <section class="surface m-[22px] mt-4 p-4">
-  <h3 class="mb-3.5">Running instances</h3>
+  <h3 class="mb-6">Running instances</h3>
   <Table.Root containerLabel="Running instances">
     <Table.Header>
       <Table.Row>
@@ -105,7 +105,7 @@
                   <Badge>{viewModeBadge(instance.viewMode)}</Badge>
                 {/if}
                 {#if profileForInstance(instance)?.volumeKind}
-                  <Badge title="Volume kind, detected from the mount itself">
+                  <Badge variant="secondary" style={volumeKindBadgeStyle(profileForInstance(instance)?.volumeKind)} title="Volume kind, detected from the mount itself">
                     {profileForInstance(instance)?.volumeKind === 'iceberg' ? 'Iceberg' : 'General'}
                   </Badge>
                 {/if}

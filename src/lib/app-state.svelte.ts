@@ -1,4 +1,4 @@
-import { toast } from 'svelte-sonner'
+import { showErrorToast, showInfoToast, showWarningToast } from './toast.svelte'
 import {
   backendNeedsMountPath,
   buildDeletedArgv,
@@ -22,6 +22,7 @@ import { viewModeBadge } from './health'
 import {
   browseFolder,
   createDiagnosticsBundle,
+  defaultViewDestination,
   deleteProfile,
   deleteProfileSecret,
   exportProfile,
@@ -73,12 +74,11 @@ export const SECRET_ACCESS_KEY_LENGTH = 40
 
 // Mount-list refresh cadence. The options are fixed rather than a free number
 // field: the useful range is small, and a typo'd 0 would hammer the CLI.
-export const DEFAULT_POLL_SECONDS = 5
+export const DEFAULT_POLL_SECONDS = 10
 export const HIDDEN_POLL_MS = 30_000
-export const POLL_CHOICES = [2, 5, 10, 30, 60]
+export const POLL_CHOICES = [0, 2, 5, 10, 30, 60]
 
-// Matches the old banner's auto-dismiss window; sonner's own hover-pause
-// behavior replaces the previous holdNotice/releaseNotice hand-rolled pause.
+// Matches the old banner's auto-dismiss window.
 const NOTICE_AUTO_DISMISS_MS = 6000
 
 export interface GatewayLaunchRecord {
@@ -110,13 +110,21 @@ const state = $state({
   profiles: [] as MountProfile[],
   systemState: { platform: 'macos', checkOk: false, issues: [], instances: [], cliPathAlternates: [], terminals: [] } as SystemState,
   selectedProfileId: null as string | null,
+  // The volume kind as last known persisted (selectProfile/refresh/save),
+  // NOT the live-edited draft in `profiles` -- patchProfile mutates that
+  // immediately on every keystroke/selection, before Save is ever pressed,
+  // so using it directly would show the "locked" read-only state (and grey
+  // out accessKeyId/discoveryUrl/volume) the instant a value is picked in
+  // the dropdown, not once it's actually saved and the backend's
+  // require_stable_identity actually locks it.
+  selectedProfileSnapshotVolumeKind: undefined as 'general' | 'iceberg' | undefined,
   query: '',
   busy: false,
   commandText: '',
   rejectedArgs: [] as string[],
   extraArgsInput: '',
   extraArgsError: '',
-  settings: { defaultBackend: 'auto', advancedOpsEnabled: false } as DesktopSettings,
+  settings: { defaultBackend: 'auto', allowForkForceDelete: false } as DesktopSettings,
   vaultStatus: {} as Record<string, boolean>,
   diagnosticsBundle: null as DiagnosticsBundle | null,
   mcpStatusText: '',
@@ -125,6 +133,7 @@ const state = $state({
   mountHelpVisible: false,
   sidebarCollapsed: initialSidebarCollapsed(),
   skipUnmountConfirm: initialSkipUnmountConfirm(),
+  tipsOpen: false,
 
   // Secret prompt (mount)
   secretPromptFor: null as string | null,
@@ -138,24 +147,40 @@ const state = $state({
   // Unmount confirm
   unmountPromptFor: null as MountInstance | 'all' | null,
 
-  // Fork management (Settings-gated, §17.7): structured list (fork list
-  // --json) + create/delete/restore mini-forms in the profile editor. Single
-  // gate: renders directly whenever settings.advancedOpsEnabled, no second
-  // disclosure toggle.
+  // Fork management: its own navigable place (ForkBrowserView), reached from
+  // the profile editor via a "Forks" satellite button -- not embedded inline
+  // in the editor form. Always available; only --force on delete is gated
+  // (settings.allowForkForceDelete).
+  viewingForks: false,
   forks: [] as Fork[],
   // null = viewing the profile's own root ("main"); otherwise the fid of the
   // fork currently drilled into. Pure client-side navigation over `forks`,
   // no CLI call -- see drillIntoFork.
   forkDrillFid: null as number | null,
+  forkListSecretValue: '',
+  forkBusy: false,
+  forkError: '',
+
+  // Create/delete/restore are dialogs, same secret-conditional-field
+  // convention as mount and the Snapshot/Deleted/Version/Gateway dialogs.
+  forkCreatePromptFor: null as MountProfile | null,
   forkCreateName: '',
   forkCreateParent: '',
   forkCreateAsOfLocal: '',
-  forkTargetName: '',
+  forkCreateSecretValue: '',
+  forkCreateError: '',
+
+  // Delete/restore target one specific fork (a row action), not a free-text
+  // or Select-picked name -- this dialog is also the delete confirmation
+  // fork delete previously had none of.
+  forkDeletePromptFor: null as Fork | null,
   forkDeleteForce: false,
-  forkActionResultText: '',
-  forkSecretValue: '',
-  forkBusy: false,
-  forkError: '',
+  forkDeleteSecretValue: '',
+  forkDeleteError: '',
+
+  forkRestorePromptFor: null as Fork | null,
+  forkRestoreSecretValue: '',
+  forkRestoreError: '',
 
   // Snapshot/Deleted/Version view-mount dialogs: destination is always an
   // explicit folder pick (browseFolder), never free-typed -- -m/--destination
@@ -344,12 +369,9 @@ let knownInstances = new Map<string, string>()
 const expectedGone = new Set<string>()
 
 export function notify(text: string, kind: 'info' | 'warn' | 'error' = 'info') {
-  // Errors stay until dismissed (an operator-requested action that failed
-  // needs a decision); info/warn auto-dismiss like the old banner did.
-  const duration = kind === 'error' ? Infinity : NOTICE_AUTO_DISMISS_MS
-  if (kind === 'error') toast.error(text, { duration })
-  else if (kind === 'warn') toast.warning(text, { duration })
-  else toast(text, { duration })
+  if (kind === 'error') showErrorToast(text)
+  else if (kind === 'warn') showWarningToast(text, NOTICE_AUTO_DISMISS_MS)
+  else showInfoToast(text, NOTICE_AUTO_DISMISS_MS)
 }
 
 export function describeError(error: unknown) {
@@ -405,6 +427,7 @@ export async function refresh(announce = true) {
     state.selectedProfileId ??= nextProfiles[0]?.id ?? null
     const selected = nextProfiles.find((profile) => profile.id === state.selectedProfileId) ?? nextProfiles[0]
     state.extraArgsInput = selected ? selected.extraArgs.map(quoteArg).join(' ') : ''
+    state.selectedProfileSnapshotVolumeKind = selected?.volumeKind
     await refreshVaultStatus(nextProfiles)
     updatePreview()
     await autofixVolumeKinds(nextState.instances)
@@ -432,6 +455,7 @@ async function autofixVolumeKinds(instances: MountInstance[]) {
       if (config.volumeType !== 'general' && config.volumeType !== 'iceberg') continue
       const saved = await saveProfile({ ...profile, volumeKind: config.volumeType, updatedAt: new Date().toISOString() })
       state.profiles = state.profiles.map((candidate) => (candidate.id === saved.id ? saved : candidate))
+      if (state.selectedProfileId === saved.id) state.selectedProfileSnapshotVolumeKind = saved.volumeKind
       notify(`Volume kind detected: ${config.volumeType === 'iceberg' ? 'Iceberg' : 'General'} for "${profile.name}"`)
     } catch {
       // Best-effort: an unreadable config (mount not fully up yet, etc.) just
@@ -559,19 +583,41 @@ export function canOpenViewsFor(instance: MountInstance): boolean {
   )
 }
 
+// Pure client-side navigation over the already-fetched fork list -- no CLI
+// call. `fid: null` returns to the profile's own root ("main").
+export function drillIntoFork(fid: number | null) {
+  state.forkDrillFid = fid
+}
+
+// Enters ForkBrowserView for the given profile, reached from the profile
+// editor's "Forks" satellite button. Always available -- no settings gate.
+export function enterForkBrowser(profile: MountProfile | undefined) {
+  if (!profile) return
+  state.viewingForks = true
+  state.forkDrillFid = null
+  state.forks = []
+  state.forkListSecretValue = ''
+  state.forkError = ''
+}
+
+export function exitForkBrowser() {
+  state.viewingForks = false
+  state.forkDrillFid = null
+}
+
 export async function runForkList() {
   if (!selectedProfile) return
   const targetId = selectedProfile.id
   state.forkBusy = true
   state.forkError = ''
   try {
-    const result = await forkList(selectedProfile.id, state.forkSecretValue || undefined)
+    const result = await forkList(selectedProfile.id, state.forkListSecretValue || undefined)
     // The user may have switched to a different profile (and had its own
-    // panel state reset by selectProfile) while this request was in flight --
-    // a late response must never overwrite the wrong profile's view.
+    // browser state reset by selectProfile) while this request was in flight
+    // -- a late response must never overwrite the wrong profile's view.
     if (state.selectedProfileId !== targetId) return
     state.forks = result
-    state.forkSecretValue = ''
+    state.forkListSecretValue = ''
   } catch (error) {
     if (state.selectedProfileId === targetId) state.forkError = describeError(error)
   } finally {
@@ -582,88 +628,102 @@ export async function runForkList() {
   }
 }
 
-async function refreshForkListIfVisible() {
-  if (!selectedProfile || state.forks.length === 0) return
-  const targetId = selectedProfile.id
-  try {
-    const result = await forkList(selectedProfile.id, state.forkSecretValue || undefined)
-    if (state.selectedProfileId === targetId) state.forks = result
-  } catch {
-    // Best-effort refresh only; the create/delete/restore result already
-    // surfaced its own success or error above.
-  }
+// Create/delete/restore below follow the same request/confirm/cancel triple
+// as the Snapshot/Deleted/Version/Gateway dialogs (secret-conditional field,
+// same convention as mount) -- "same logic in place" per the profile editor's
+// other satellite actions.
+
+export function requestForkCreate(profile: MountProfile | undefined) {
+  if (!profile) return
+  state.forkCreatePromptFor = profile
+  state.forkCreateName = ''
+  state.forkCreateParent = ''
+  state.forkCreateAsOfLocal = ''
+  state.forkCreateSecretValue = ''
+  state.forkCreateError = ''
 }
 
-// Pure client-side navigation over the already-fetched fork list -- no CLI
-// call. `fid: null` returns to the profile's own root ("main").
-export function drillIntoFork(fid: number | null) {
-  state.forkDrillFid = fid
+export function cancelForkCreate() {
+  state.forkCreatePromptFor = null
+  state.forkCreateSecretValue = ''
 }
 
-export async function runForkCreate() {
-  if (!selectedProfile) return
-  const targetId = selectedProfile.id
+export async function confirmForkCreate() {
+  const profile = state.forkCreatePromptFor
+  if (!profile) return
   const name = state.forkCreateName.trim()
   if (!name) return
   state.forkBusy = true
-  state.forkError = ''
+  state.forkCreateError = ''
   try {
-    const result = await forkCreate(
-      selectedProfile.id,
-      name,
-      state.forkCreateParent.trim() || undefined,
-      forkCreateAsOf.trim() || undefined,
-      state.forkSecretValue || undefined,
-    )
-    if (state.selectedProfileId !== targetId) return
-    state.forkActionResultText = result
-    state.forkSecretValue = ''
+    await forkCreate(profile.id, name, state.forkCreateParent.trim() || undefined, forkCreateAsOf.trim() || undefined, state.forkCreateSecretValue || undefined)
+    state.forkCreatePromptFor = null
+    state.forkCreateSecretValue = ''
     notify(`Fork "${name}" created`)
-    await refreshForkListIfVisible()
+    await runForkList()
   } catch (error) {
-    if (state.selectedProfileId === targetId) state.forkError = describeError(error)
+    state.forkCreateError = describeError(error)
   } finally {
     state.forkBusy = false
   }
 }
 
-export async function runForkDelete() {
-  if (!selectedProfile) return
-  const targetId = selectedProfile.id
-  const name = state.forkTargetName.trim()
-  if (!name) return
+export function requestForkDelete(fork: Fork) {
+  state.forkDeletePromptFor = fork
+  state.forkDeleteForce = false
+  state.forkDeleteSecretValue = ''
+  state.forkDeleteError = ''
+}
+
+export function cancelForkDelete() {
+  state.forkDeletePromptFor = null
+  state.forkDeleteSecretValue = ''
+}
+
+export async function confirmForkDelete() {
+  const fork = state.forkDeletePromptFor
+  const profile = selectedProfile
+  if (!fork || !profile) return
   state.forkBusy = true
-  state.forkError = ''
+  state.forkDeleteError = ''
   try {
-    const result = await forkDelete(selectedProfile.id, name, state.forkDeleteForce, state.forkSecretValue || undefined)
-    if (state.selectedProfileId !== targetId) return
-    state.forkActionResultText = result
-    state.forkSecretValue = ''
-    notify(`Fork "${name}" deleted`)
-    await refreshForkListIfVisible()
+    await forkDelete(profile.id, fork.name, state.forkDeleteForce, state.forkDeleteSecretValue || undefined)
+    state.forkDeletePromptFor = null
+    state.forkDeleteSecretValue = ''
+    notify(`Fork "${fork.name}" deleted`)
+    await runForkList()
   } catch (error) {
-    if (state.selectedProfileId === targetId) state.forkError = describeError(error)
+    state.forkDeleteError = describeError(error)
   } finally {
     state.forkBusy = false
   }
 }
 
-export async function runForkRestore() {
-  if (!selectedProfile) return
-  const targetId = selectedProfile.id
-  const name = state.forkTargetName.trim()
-  if (!name) return
+export function requestForkRestore(fork: Fork) {
+  state.forkRestorePromptFor = fork
+  state.forkRestoreSecretValue = ''
+  state.forkRestoreError = ''
+}
+
+export function cancelForkRestore() {
+  state.forkRestorePromptFor = null
+  state.forkRestoreSecretValue = ''
+}
+
+export async function confirmForkRestore() {
+  const fork = state.forkRestorePromptFor
+  const profile = selectedProfile
+  if (!fork || !profile) return
   state.forkBusy = true
-  state.forkError = ''
+  state.forkRestoreError = ''
   try {
-    const result = await forkRestore(selectedProfile.id, name, state.forkSecretValue || undefined)
-    if (state.selectedProfileId !== targetId) return
-    state.forkActionResultText = result
-    state.forkSecretValue = ''
-    notify(`Fork "${name}" restored`)
-    await refreshForkListIfVisible()
+    await forkRestore(profile.id, fork.name, state.forkRestoreSecretValue || undefined)
+    state.forkRestorePromptFor = null
+    state.forkRestoreSecretValue = ''
+    notify(`Fork "${fork.name}" restored`)
+    await runForkList()
   } catch (error) {
-    if (state.selectedProfileId === targetId) state.forkError = describeError(error)
+    state.forkRestoreError = describeError(error)
   } finally {
     state.forkBusy = false
   }
@@ -675,7 +735,7 @@ export async function runForkRestore() {
 // credentials. Triggered directly from the profile editor (any profile,
 // mounted or not), or -- for Deleted/Version only, per owner decision -- as a
 // row-action shortcut on a live instance via profileForInstance.
-export function requestSnapshotView(profile: MountProfile | undefined) {
+export async function requestSnapshotView(profile: MountProfile | undefined) {
   if (!profile) return
   state.snapshotPromptFor = profile
   state.snapshotDestination = ''
@@ -685,6 +745,15 @@ export function requestSnapshotView(profile: MountProfile | undefined) {
   state.snapshotRelativeUnit = 'h'
   state.snapshotSecretValue = ''
   state.snapshotError = ''
+  try {
+    // Best-effort default so the folder picker isn't required; Browse still
+    // overrides it, and confirmSnapshotView falls back to a fresh one anyway
+    // if this never resolved (bridge unavailable, permission denied, etc).
+    const destination = await defaultViewDestination(profile.name, 'snap')
+    if (state.snapshotPromptFor === profile) state.snapshotDestination = destination
+  } catch {
+    // Left blank; confirmSnapshotView computes its own fallback.
+  }
 }
 
 export function cancelSnapshotPrompt() {
@@ -703,7 +772,8 @@ export async function confirmSnapshotView() {
   state.busy = true
   state.snapshotError = ''
   try {
-    const result = await openSnapshotView(profile.id, state.snapshotDestination, snapshotTimestampValue, state.snapshotSecretValue || undefined)
+    const destination = state.snapshotDestination || (await defaultViewDestination(profile.name, 'snap'))
+    const result = await openSnapshotView(profile.id, destination, snapshotTimestampValue, state.snapshotSecretValue || undefined)
     state.snapshotPromptFor = null
     state.snapshotSecretValue = ''
     await refresh(false)
@@ -715,7 +785,7 @@ export async function confirmSnapshotView() {
   }
 }
 
-export function requestDeletedView(profile: MountProfile | undefined) {
+export async function requestDeletedView(profile: MountProfile | undefined) {
   if (!profile) return
   state.deletedPromptFor = profile
   state.deletedDestination = ''
@@ -726,6 +796,15 @@ export function requestDeletedView(profile: MountProfile | undefined) {
   state.deletedIdleTimeout = '30m'
   state.deletedSecretValue = ''
   state.deletedError = ''
+  try {
+    // Best-effort default so the folder picker isn't required; Browse still
+    // overrides it, and confirmDeletedView falls back to a fresh one anyway
+    // if this never resolved (bridge unavailable, permission denied, etc).
+    const destination = await defaultViewDestination(profile.name, 'del')
+    if (state.deletedPromptFor === profile) state.deletedDestination = destination
+  } catch {
+    // Left blank; confirmDeletedView computes its own fallback.
+  }
 }
 
 export function cancelDeletedPrompt() {
@@ -744,9 +823,10 @@ export async function confirmDeletedView() {
   state.busy = true
   state.deletedError = ''
   try {
+    const destination = state.deletedDestination || (await defaultViewDestination(profile.name, 'del'))
     const result = await openDeletedView(
       profile.id,
-      state.deletedDestination,
+      destination,
       deletedFromValue || undefined,
       state.deletedIdleTimeout.trim() || undefined,
       state.deletedSecretValue || undefined,
@@ -762,7 +842,7 @@ export async function confirmDeletedView() {
   }
 }
 
-export function requestVersionView(profile: MountProfile | undefined) {
+export async function requestVersionView(profile: MountProfile | undefined) {
   if (!profile) return
   state.versionPromptFor = profile
   state.versionDestination = ''
@@ -771,6 +851,15 @@ export function requestVersionView(profile: MountProfile | undefined) {
   state.versionIdleTimeout = '30m'
   state.versionSecretValue = ''
   state.versionError = ''
+  try {
+    // Best-effort default so the folder picker isn't required; Browse still
+    // overrides it, and confirmVersionView falls back to a fresh one anyway
+    // if this never resolved (bridge unavailable, permission denied, etc).
+    const destination = await defaultViewDestination(profile.name, 'ver')
+    if (state.versionPromptFor === profile) state.versionDestination = destination
+  } catch {
+    // Left blank; confirmVersionView computes its own fallback.
+  }
 }
 
 export function cancelVersionPrompt() {
@@ -789,9 +878,10 @@ export async function confirmVersionView() {
   state.busy = true
   state.versionError = ''
   try {
+    const destination = state.versionDestination || (await defaultViewDestination(profile.name, 'ver'))
     const result = await openVersionView(
       profile.id,
-      state.versionDestination,
+      destination,
       state.versionInode.trim(),
       state.versionFormat,
       state.versionIdleTimeout.trim() || undefined,
@@ -999,6 +1089,7 @@ export async function persistSelected() {
     const saved = await saveProfile({ ...selectedProfile, updatedAt: new Date().toISOString() })
     state.profiles = state.profiles.map((profile) => (profile.id === saved.id ? saved : profile))
     state.selectedProfileId = saved.id
+    state.selectedProfileSnapshotVolumeKind = saved.volumeKind
     notify('Profile saved')
   } catch (error) {
     notify(error instanceof Error ? error.message : 'Profile save failed', 'error')
@@ -1013,19 +1104,28 @@ export async function persistSelected() {
 // having set it for that profile.
 export function selectProfile(profile: MountProfile) {
   state.selectedProfileId = profile.id
+  state.selectedProfileSnapshotVolumeKind = profile.volumeKind
   state.extraArgsInput = profile.extraArgs.map(quoteArg).join(' ')
   state.extraArgsError = ''
   updatePreview(profile)
-  state.forkSecretValue = ''
+  state.viewingForks = false
   state.forks = []
   state.forkDrillFid = null
+  state.forkListSecretValue = ''
+  state.forkError = ''
+  state.forkCreatePromptFor = null
   state.forkCreateName = ''
   state.forkCreateParent = ''
   state.forkCreateAsOfLocal = ''
-  state.forkTargetName = ''
+  state.forkCreateSecretValue = ''
+  state.forkCreateError = ''
+  state.forkDeletePromptFor = null
   state.forkDeleteForce = false
-  state.forkActionResultText = ''
-  state.forkError = ''
+  state.forkDeleteSecretValue = ''
+  state.forkDeleteError = ''
+  state.forkRestorePromptFor = null
+  state.forkRestoreSecretValue = ''
+  state.forkRestoreError = ''
 }
 
 export function updatePreview(profile = selectedProfile) {
@@ -1326,6 +1426,14 @@ export function setSkipUnmountConfirm(next: boolean) {
   if (typeof localStorage !== 'undefined') localStorage.setItem('mountos-desktop-skip-unmount-confirm', String(next))
 }
 
+export function showTips() {
+  state.tipsOpen = true
+}
+
+export function hideTips() {
+  state.tipsOpen = false
+}
+
 export async function loadSettings() {
   try {
     state.settings = await getSettings()
@@ -1343,10 +1451,10 @@ export async function changeDefaultBackend(backend: Backend) {
   }
 }
 
-export async function changeAdvancedOpsEnabled(enabled: boolean) {
+export async function changeAllowForkForceDelete(enabled: boolean) {
   try {
-    state.settings = await saveSettings({ ...state.settings, advancedOpsEnabled: enabled })
-    notify(enabled ? 'Fork management enabled' : 'Fork management disabled')
+    state.settings = await saveSettings({ ...state.settings, allowForkForceDelete: enabled })
+    notify(enabled ? 'Force fork delete allowed' : 'Force fork delete disallowed')
   } catch (error) {
     notify(error instanceof Error ? error.message : 'Failed to save settings', 'error')
   }

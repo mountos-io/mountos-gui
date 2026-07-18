@@ -488,15 +488,17 @@
     color: var(--bracket-hover-dark);
   }
 
-  /* Small variant for buttons (6px cuts) */
+  /* Small variant for buttons (10px cuts) -- only meant for solid/filled
+     buttons (primary, destructive); an outline button's own border already
+     reads its shape, and the chamfer looks off cut into a bordered edge. */
   .cyberpunk-skewed-sm {
     position: relative;
     clip-path: polygon(
-      0 6px,
-      6px 0,
+      0 10px,
+      10px 0,
       100% 0,
-      100% calc(100% - 6px),
-      calc(100% - 6px) 100%,
+      100% calc(100% - 10px),
+      calc(100% - 10px) 100%,
       0 100%
     );
   }
@@ -506,8 +508,8 @@
     position: absolute;
     inset: 0;
     background:
-      linear-gradient(135deg, currentColor 1px, transparent 1px) 0 0 / 9px 9px,
-      linear-gradient(-45deg, currentColor 1px, transparent 1px) 100% 100% / 9px 9px;
+      linear-gradient(135deg, currentColor 1px, transparent 1px) 0 0 / 14px 14px,
+      linear-gradient(-45deg, currentColor 1px, transparent 1px) 100% 100% / 14px 14px;
     background-repeat: no-repeat;
     color: var(--bracket-color);
     pointer-events: none;

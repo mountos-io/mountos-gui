@@ -6,6 +6,7 @@
     FileDown,
     FilePlus,
     FolderOpen,
+    GitBranch,
     HardDrive,
     History,
     KeyRound,
@@ -25,8 +26,9 @@
   import { Badge } from '$lib/components/ui/badge'
   import Callout from '$lib/components/Callout.svelte'
   import CommandPreview from '$lib/components/CommandPreview.svelte'
-  import ForkManagementPanel from '$lib/components/ForkManagementPanel.svelte'
+  import ForkBrowserView from '$lib/components/views/ForkBrowserView.svelte'
   import { FSKIT_MOUNT_PREFIX } from '$lib/cli'
+  import { volumeKindBadgeStyle } from '$lib/health'
   import type { Backend } from '$lib/types'
   import {
     ACCESS_KEY_ID_LENGTH,
@@ -35,6 +37,7 @@
     buildMountArgv,
     computed,
     duplicateSelected,
+    enterForkBrowser,
     exportSelected,
     forgetSecret,
     newProfile,
@@ -89,15 +92,12 @@
     </div>
   </div>
 
-  {#if computed.selectedProfile}
+  {#if computed.selectedProfile && appState.viewingForks}
+    <ForkBrowserView />
+  {:else if computed.selectedProfile}
     {@const selectedProfile = computed.selectedProfile}
     <form class="surface corner-brackets p-4 grid gap-4" onsubmit={(event) => { event.preventDefault(); void persistSelected() }}>
-      <div class="flex items-start justify-between gap-4">
-        {#if selectedProfile.volumeKind}
-          <Badge title="Volume kind, detected from the mount itself; locks the profile's identity fields">
-            {selectedProfile.volumeKind === 'iceberg' ? 'Iceberg' : 'General'}
-          </Badge>
-        {/if}
+      <div class="flex items-start justify-end gap-4">
         <div class="relative flex flex-wrap items-center gap-2 border border-border/30 p-2 ml-auto">
           <div class="tech-grid absolute inset-0 pointer-events-none opacity-20" aria-hidden="true"></div>
           <Button variant="outline" size="icon" class="relative" title="Duplicate profile" aria-label="Duplicate profile" disabled={appState.busy} onclick={duplicateSelected}>
@@ -109,6 +109,7 @@
           <Button variant="destructive" size="icon" class="relative" title="Delete profile" aria-label="Delete profile" disabled={appState.busy} onclick={() => (appState.deletePromptFor = selectedProfile)}>
             <Trash2 size={16} aria-hidden="true" />
           </Button>
+          <div class="relative h-6 w-px bg-border/60" aria-hidden="true"></div>
           <Button type="button" class="relative" disabled={appState.busy || !!appState.extraArgsError || appState.rejectedArgs.length > 0 || !!computed.mountPathError || !!computed.accessKeyError || !!computed.volumeNameError} onclick={() => runMount(selectedProfile)}>
             <Power size={16} aria-hidden="true" />
             Mount
@@ -129,6 +130,10 @@
             <Button type="button" class="relative" title="Launch an S3/HDFS gateway for this volume" disabled={appState.busy} onclick={() => requestGatewayView(selectedProfile)}>
               <Network size={16} aria-hidden="true" />
               Gateway
+            </Button>
+            <Button type="button" class="relative" title="Browse and manage this volume's forks" disabled={appState.busy} onclick={() => enterForkBrowser(selectedProfile)}>
+              <GitBranch size={16} aria-hidden="true" />
+              Forks
             </Button>
           {/if}
           <Button variant="primary" type="submit" class="relative cyberpunk-skewed-sm" disabled={appState.busy || !!appState.extraArgsError || appState.rejectedArgs.length > 0 || !!computed.mountPathError || !!computed.accessKeyError || !!computed.volumeNameError}>
@@ -152,12 +157,19 @@
             onchange={(value) => patchProfile({ backend: value as Backend })}
           />
         </div>
-        {#if !selectedProfile.volumeKind}
-          <div class="grid gap-1.5">
-            <!-- Editable only until the first real mount detects it: once set,
-                 require_stable_identity (src-tauri/src/lib.rs) locks it
-                 server-side and this profile shows the read-only Badge above
-                 instead. -->
+        <div class="grid gap-1.5">
+          {#if appState.selectedProfileSnapshotVolumeKind}
+            <!-- Read-only once actually saved: require_stable_identity
+                 (src-tauri/src/lib.rs) then rejects changing it server-side.
+                 Checked against the last-loaded/saved snapshot, not the live
+                 draft -- picking a value in the Select below is not yet
+                 saved, and must not switch to this locked state before Save
+                 is pressed. -->
+            <Label id="profile-volume-kind-label">Volume kind</Label>
+            <Badge variant="secondary" style={volumeKindBadgeStyle(appState.selectedProfileSnapshotVolumeKind)} title="Detected from the mount itself; locks accessKeyId/discoveryUrl/volume">
+              {appState.selectedProfileSnapshotVolumeKind === 'iceberg' ? 'Iceberg' : 'General'}
+            </Badge>
+          {:else}
             <Label id="profile-volume-kind-label">Volume kind</Label>
             <Select
               options={volumeKindOptions}
@@ -165,19 +177,16 @@
               onchange={(value) => patchProfile({ volumeKind: (value || undefined) as 'general' | 'iceberg' | undefined })}
               ariaLabelledby="profile-volume-kind-label"
             />
-          </div>
-        {/if}
+          {/if}
+        </div>
         <div class="grid gap-1.5">
           <Label for="profile-discovery-url">Discovery URL</Label>
           <Input
             id="profile-discovery-url"
             value={selectedProfile.discoveryUrl}
-            disabled={Boolean(selectedProfile.volumeKind)}
+            disabled={Boolean(appState.selectedProfileSnapshotVolumeKind)}
             oninput={(e) => patchProfile({ discoveryUrl: e.currentTarget.value })}
           />
-          {#if selectedProfile.volumeKind}
-            <small class="text-muted-foreground text-sm">Locked: this profile's volume kind is known, so its identity can't change. Delete and recreate to point at a different volume.</small>
-          {/if}
         </div>
         <div class="grid gap-1.5">
           <Label for="profile-access-key">Access key ID</Label>
@@ -185,7 +194,7 @@
             id="profile-access-key"
             value={selectedProfile.accessKeyId}
             maxlength={ACCESS_KEY_ID_LENGTH}
-            disabled={Boolean(selectedProfile.volumeKind)}
+            disabled={Boolean(appState.selectedProfileSnapshotVolumeKind)}
             oninput={(e) => setAccessKeyId(e.currentTarget.value)}
           />
           {#if computed.accessKeyError}
@@ -197,7 +206,7 @@
           <Input
             id="profile-volume"
             value={selectedProfile.volume}
-            disabled={Boolean(selectedProfile.volumeKind)}
+            disabled={Boolean(appState.selectedProfileSnapshotVolumeKind)}
             oninput={(e) => patchProfile({ volume: e.currentTarget.value })}
           />
           {#if computed.volumeNameError}
@@ -270,7 +279,7 @@
           checked={selectedProfile.temporaryFork}
           onchange={(e) => patchProfile({ temporaryFork: e.currentTarget.checked })}
           label="Temporary fork"
-          title="Creates an ephemeral per-session fork for this mount; discarded when it unmounts, the underlying volume is never touched"
+          title="Ephemeral fork for this session; discarded on unmount, volume untouched"
         />
       </div>
 
@@ -293,10 +302,6 @@
         <CommandPreview label="MOUNTOS MOUNT -H">
           <pre class="m-0 whitespace-pre-wrap break-words"><code>{appState.mountHelpText}</code></pre>
         </CommandPreview>
-      {/if}
-
-      {#if appState.settings.advancedOpsEnabled}
-        <ForkManagementPanel />
       {/if}
 
       {#if appState.extraArgsError}

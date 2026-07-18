@@ -108,7 +108,7 @@ struct MountInstance {
     // the backend, so it is not a stand-in for this.
     backend: Option<String>,
     view_mode: Option<String>,
-    project_volume_id: Option<String>,
+    volume_identifier: Option<String>,
     volume_id: Option<u32>,
     domain_id: Option<String>,
     unc_path: Option<String>,
@@ -231,14 +231,15 @@ struct DesktopSettings {
     // set, a moved/missing pinned binary is a hard error (see
     // mountos_path) rather than a silent fallback to a different install.
     cli_path_override: Option<String>,
-    // Gates the Fork management surface (fork list/create/delete/restore) in
-    // the profile editor. Off by default: fork delete/restore mutate shared
-    // server-side volume state used by every OTHER mount of the same volume,
-    // not just this profile's. #[serde(default)] so settings.json files
-    // written before this field existed still deserialize to `false` rather
-    // than failing, matching the temporary_fork precedent on MountProfile.
+    // Gates --force on fork delete, which also removes the fork's entire
+    // subtree. Off by default: it mutates shared server-side volume state
+    // used by every OTHER mount of the same volume, not just this profile's.
+    // Fork list/create/delete/restore themselves are always available.
+    // #[serde(default)] so settings.json files written before this field
+    // existed still deserialize to `false` rather than failing, matching the
+    // temporary_fork precedent on MountProfile.
     #[serde(default)]
-    advanced_ops_enabled: bool,
+    allow_fork_force_delete: bool,
 }
 
 impl Default for DesktopSettings {
@@ -249,7 +250,7 @@ impl Default for DesktopSettings {
             cli_path_override: None,
             poll_seconds: None,
             terminal: None,
-            advanced_ops_enabled: false,
+            allow_fork_force_delete: false,
         }
     }
 }
@@ -1396,8 +1397,8 @@ fn parse_instances_value(value: &Value) -> Vec<MountInstance> {
                     .get("viewMode")
                     .and_then(Value::as_str)
                     .map(ToString::to_string),
-                project_volume_id: entry
-                    .get("projectVolumeId")
+                volume_identifier: entry
+                    .get("volumeIdentifier")
                     .and_then(Value::as_str)
                     .map(ToString::to_string),
                 volume_id: entry
@@ -1502,12 +1503,14 @@ fn get_settings(app: AppHandle) -> Result<DesktopSettings, DesktopError> {
 fn save_settings(app: AppHandle, settings: DesktopSettings) -> Result<DesktopSettings, DesktopError> {
     validate_backend_for_platform(&settings.default_backend)?;
     // Bounded here, not just in the picker: settings.json is a plain file a user
-    // can hand-edit, and 0 would busy-loop the CLI while a huge value would look
-    // like the list had frozen.
+    // can hand-edit, and a huge value would look like the list had frozen. 0 is
+    // the explicit "Off" sentinel (auto-refresh disabled, manual Refresh button
+    // only) -- not a busy-loop interval, since the frontend never starts a
+    // timer for it.
     if let Some(seconds) = settings.poll_seconds {
-        if !(1..=3600).contains(&seconds) {
+        if seconds != 0 && !(1..=3600).contains(&seconds) {
             return Err(DesktopError::Message(format!(
-                "refresh interval must be between 1 and 3600 seconds, got {seconds}"
+                "refresh interval must be 0 (off) or between 1 and 3600 seconds, got {seconds}"
             )));
         }
     }
@@ -2109,21 +2112,21 @@ fn resolve_satellite_secret(
     }
 }
 
-// Server-side re-check, not just a hidden button, so a fork command reached
-// by any other in-app code path still honors the same gate as the button.
-// This is NOT a boundary against a hostile renderer: `advanced_ops_enabled`
+// Server-side re-check, not just a hidden checkbox, so fork_delete reached by
+// any other in-app code path still honors the same gate as the setting. This
+// is NOT a boundary against a hostile renderer: `allow_fork_force_delete`
 // lives in settings.json, and save_settings writes it back verbatim, so any
-// invoke() caller can flip it on with one extra call before calling a fork
-// command. Closing that would require treating the webview as adversarial,
-// which no other command in this app does either (mount/unmount/save_profile
-// are all equally reachable) -- accepted, same trust model as the rest of
-// this file's Tauri commands.
-fn require_advanced_ops(app: &AppHandle) -> Result<(), DesktopError> {
-    if get_settings(app.clone())?.advanced_ops_enabled {
+// invoke() caller can flip it on with one extra call before calling
+// fork_delete with force=true. Closing that would require treating the
+// webview as adversarial, which no other command in this app does either
+// (mount/unmount/save_profile are all equally reachable) -- accepted, same
+// trust model as the rest of this file's Tauri commands.
+fn require_force_delete_allowed(app: &AppHandle) -> Result<(), DesktopError> {
+    if get_settings(app.clone())?.allow_fork_force_delete {
         Ok(())
     } else {
         Err(DesktopError::Message(
-            "Fork management is disabled. Enable it in Settings first.".to_string(),
+            "Force fork delete is disabled. Enable it in Settings first.".to_string(),
         ))
     }
 }
@@ -2133,7 +2136,6 @@ fn fork_list_blocking(
     profile_id: String,
     secret: Option<String>,
 ) -> Result<String, DesktopError> {
-    require_advanced_ops(&app)?;
     let profile = find_profile(&app, &profile_id)?;
     let resolved_secret = resolve_satellite_secret(&profile, secret)?;
     fork_command_blocking(build_fork_list_argv(&profile), resolved_secret)
@@ -2158,7 +2160,6 @@ fn fork_create_blocking(
     as_of: Option<String>,
     secret: Option<String>,
 ) -> Result<String, DesktopError> {
-    require_advanced_ops(&app)?;
     let profile = find_profile(&app, &profile_id)?;
     let name = validate_fork_name(&name)?;
     let resolved_secret = resolve_satellite_secret(&profile, secret)?;
@@ -2191,7 +2192,9 @@ fn fork_delete_blocking(
     force: bool,
     secret: Option<String>,
 ) -> Result<String, DesktopError> {
-    require_advanced_ops(&app)?;
+    if force {
+        require_force_delete_allowed(&app)?;
+    }
     let profile = find_profile(&app, &profile_id)?;
     let name = validate_fork_name(&name)?;
     let resolved_secret = resolve_satellite_secret(&profile, secret)?;
@@ -2219,7 +2222,6 @@ fn fork_restore_blocking(
     name: String,
     secret: Option<String>,
 ) -> Result<String, DesktopError> {
-    require_advanced_ops(&app)?;
     let profile = find_profile(&app, &profile_id)?;
     let name = validate_fork_name(&name)?;
     let resolved_secret = resolve_satellite_secret(&profile, secret)?;

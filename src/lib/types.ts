@@ -63,7 +63,7 @@ export interface MountInstance {
   /** Transport the mount runs on, from `mountos list`. Absent on older CLIs. */
   backend?: Backend
   viewMode?: string
-  projectVolumeId?: string
+  volumeIdentifier?: string
   volumeId?: number
   domainId?: string
   uncPath?: string
@@ -131,7 +131,7 @@ export interface DesktopSettings {
   // server-side volume state used by every other mount of the volume, not
   // just this profile's. Required (not optional): Rust always emits this
   // key via a plain bool + #[serde(default)], it just defaults to false.
-  advancedOpsEnabled: boolean
+  allowForkForceDelete: boolean
 }
 
 export interface ExportedProfile {

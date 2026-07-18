@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Command, HardDrive, MonitorDot, PanelLeft, Plus, RefreshCw, Settings } from '@lucide/svelte'
-  import { Toaster } from '$lib/components/ui/sonner'
+  import Toaster from '$lib/components/Toaster.svelte'
   import { Button } from '$lib/components/ui/button'
   import * as Breadcrumb from '$lib/components/ui/breadcrumb'
   import { cn } from '$lib/utils'
@@ -15,12 +15,17 @@
   import DeletedViewDialog from '$lib/components/dialogs/DeletedViewDialog.svelte'
   import VersionViewDialog from '$lib/components/dialogs/VersionViewDialog.svelte'
   import GatewayDialog from '$lib/components/dialogs/GatewayDialog.svelte'
+  import ForkCreateDialog from '$lib/components/dialogs/ForkCreateDialog.svelte'
+  import ForkDeleteDialog from '$lib/components/dialogs/ForkDeleteDialog.svelte'
+  import ForkRestoreDialog from '$lib/components/dialogs/ForkRestoreDialog.svelte'
+  import TipsDialog from '$lib/components/dialogs/TipsDialog.svelte'
   import CommandPalette from '$lib/components/CommandPalette.svelte'
   import {
     appState,
     computed,
     DEFAULT_POLL_SECONDS,
     drillIntoFork,
+    exitForkBrowser,
     HIDDEN_POLL_MS,
     loadSettings,
     newProfile,
@@ -51,18 +56,18 @@
   // then however many levels deep a fork drill-down goes).
   type Crumb = { label: string; onclick?: () => void }
   const breadcrumbs = $derived.by((): Crumb[] => {
-    const crumbs: Crumb[] = [{ label: viewTitle(appState.view) }]
+    const crumbs: Array<Crumb & { onclick?: () => void }> = [{ label: viewTitle(appState.view), onclick: exitForkBrowser }]
     if (appState.view === 'profiles' && computed.selectedProfile) {
-      crumbs.push({ label: computed.selectedProfile.name })
-      for (const fork of computed.forkBreadcrumbTrail) {
-        crumbs.push({ label: fork.name || `Fork #${fork.fid}` })
+      crumbs.push({ label: computed.selectedProfile.name, onclick: exitForkBrowser })
+      if (appState.viewingForks) {
+        crumbs.push({ label: 'Forks', onclick: () => drillIntoFork(null) })
+        for (const fork of computed.forkBreadcrumbTrail) {
+          crumbs.push({ label: fork.name || `Fork #${fork.fid}`, onclick: () => drillIntoFork(fork.fid) })
+        }
       }
     }
-    return crumbs.map((crumb, index) =>
-      index === crumbs.length - 1
-        ? crumb
-        : { ...crumb, onclick: index < 2 ? () => drillIntoFork(null) : () => drillIntoFork(computed.forkBreadcrumbTrail[index - 2].fid) },
-    )
+    // Every crumb but the last is clickable; the last is the current page.
+    return crumbs.map((crumb, index) => (index === crumbs.length - 1 ? { label: crumb.label } : crumb))
   })
 
   $effect(() => initThemeSync())
@@ -74,8 +79,11 @@
 
   $effect(() => {
     // Read inside the effect so changing the setting reschedules immediately
-    // rather than waiting for a restart.
-    const visibleMs = (appState.settings.pollSeconds ?? DEFAULT_POLL_SECONDS) * 1000
+    // rather than waiting for a restart. 0 means "Off" -- no timer at all,
+    // the Refresh button covers manual updates.
+    const pollSeconds = appState.settings.pollSeconds ?? DEFAULT_POLL_SECONDS
+    if (pollSeconds === 0) return
+    const visibleMs = pollSeconds * 1000
     // A hidden window always backs off, but never polls more often than the
     // user asked for: someone who picked 60s does not want 30s in the
     // background.
@@ -223,3 +231,7 @@
 <DeletedViewDialog />
 <VersionViewDialog />
 <GatewayDialog />
+<ForkCreateDialog />
+<ForkDeleteDialog />
+<ForkRestoreDialog />
+<TipsDialog />

@@ -87,7 +87,7 @@
           </CommandPreview>
         </div>
         <Dialog.Footer>
-          <Button type="button" variant="outline" class="cyberpunk-skewed-sm" onclick={cancelGatewayPrompt}>Cancel</Button>
+          <Button type="button" variant="outline" onclick={cancelGatewayPrompt}>Cancel</Button>
           <Button
             type="submit"
             variant="primary"

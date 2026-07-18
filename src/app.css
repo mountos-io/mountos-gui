@@ -1,7 +1,6 @@
 @import "tailwindcss";
 
 @import "tw-animate-css";
-@import "./lib/styles/toast.css";
 @import "./lib/styles/corner-brackets.css";
 
 @custom-variant dark (&:is(.dark *));
@@ -148,6 +147,15 @@
   --color-ring: var(--ring);
 }
 
+/* Everything below, through the reduced-motion media query, is wrapped in
+   @layer base to match Tailwind v4's own layer ordering (base < components <
+   utilities): unlayered CSS beats ALL layered CSS regardless of specificity,
+   so a bare (unlayered) `h1,h2,h3{margin:0}` here would silently defeat
+   every `mb-*` utility on a heading anywhere in the app -- confirmed as the
+   actual cause of "my margin utility isn't doing anything" on more than one
+   heading. Mirrors mountos-admin-client's app.css, which already wraps its
+   equivalent reset block this same way. */
+@layer base {
 * {
   box-sizing: border-box;
 }
@@ -204,14 +212,16 @@ p {
 }
 
 /* Deliberately no scrollbar-width/scrollbar-color: those force a permanent
-   Firefox-style bar in WebKit, overriding macOS's native overlay scrollbar
-   (thin, auto-hides, appears on hover/scroll). Only the ::-webkit-scrollbar-*
-   pseudo-elements are themed, which keeps that native show/hide behavior and
-   just recolors the thumb to the brand color when it's visible. Matches
-   mountos-admin-client's own selector set (body, [data-slot="table-container"],
-   .overflow-y-auto/.overflow-x-auto), plus .overflow-auto: this app's own main
-   content pane, CommandPreview and the expanded mount-flags box all scroll
-   both axes via that one Tailwind class, which admin-client never uses. */
+   Firefox-style bar, which would fight the auto-hide behavior below. Styling
+   ::-webkit-scrollbar at all already drops WKWebView out of macOS's native
+   overlay mode into a classic, always-reserved-space bar, so the thumb is
+   made transparent at rest and only revealed on container :hover -- the
+   closest CSS-only approximation of overlay auto-hide available once that
+   pseudo-element is touched. Matches mountos-admin-client's own selector set
+   (body, [data-slot="table-container"], .overflow-y-auto/.overflow-x-auto),
+   plus .overflow-auto: this app's own main content pane, CommandPreview and
+   the expanded mount-flags box all scroll both axes via that one Tailwind
+   class, which admin-client never uses. */
 body::-webkit-scrollbar,
 [data-slot="table-container"]::-webkit-scrollbar,
 .overflow-y-auto::-webkit-scrollbar,
@@ -234,8 +244,17 @@ body::-webkit-scrollbar-thumb,
 .overflow-y-auto::-webkit-scrollbar-thumb,
 .overflow-x-auto::-webkit-scrollbar-thumb,
 .overflow-auto::-webkit-scrollbar-thumb {
-  background: var(--scrollbar-thumb);
+  background: transparent;
   border-radius: 4px;
+  transition: background 0.15s ease;
+}
+
+body:hover::-webkit-scrollbar-thumb,
+[data-slot="table-container"]:hover::-webkit-scrollbar-thumb,
+.overflow-y-auto:hover::-webkit-scrollbar-thumb,
+.overflow-x-auto:hover::-webkit-scrollbar-thumb,
+.overflow-auto:hover::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
 }
 
 body::-webkit-scrollbar-thumb:hover,
@@ -243,7 +262,6 @@ body::-webkit-scrollbar-thumb:hover,
 .overflow-y-auto::-webkit-scrollbar-thumb:hover,
 .overflow-x-auto::-webkit-scrollbar-thumb:hover,
 .overflow-auto::-webkit-scrollbar-thumb:hover {
-  background: var(--scrollbar-thumb);
   opacity: 0.8;
 }
 
@@ -335,3 +353,4 @@ body::-webkit-scrollbar-thumb:hover,
     transition-duration: 0.01ms !important;
   }
 }
+} /* end @layer base */

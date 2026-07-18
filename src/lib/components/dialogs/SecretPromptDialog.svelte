@@ -41,7 +41,7 @@
           <Callout role="alert">{appState.secretError}</Callout>
         {/if}
         <Dialog.Footer class="mt-4">
-          <Button type="button" variant="outline" class="cyberpunk-skewed-sm" onclick={cancelSecret}>Cancel</Button>
+          <Button type="button" variant="outline" onclick={cancelSecret}>Cancel</Button>
           <Button type="submit" variant="primary" class="cyberpunk-skewed-sm" disabled={appState.busy || !appState.secretValue}>Mount</Button>
         </Dialog.Footer>
       </form>

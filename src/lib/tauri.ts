@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import { join, tempDir } from '@tauri-apps/api/path'
 import { open } from '@tauri-apps/plugin-dialog'
 import type { GatewayLaunchParams } from './cli'
 import type {
@@ -96,7 +97,7 @@ export async function exportProfile(profileId: string): Promise<ExportedProfile>
 }
 
 export async function getSettings(): Promise<DesktopSettings> {
-  if (!hasDesktopBridge()) return { defaultBackend: 'auto', advancedOpsEnabled: false }
+  if (!hasDesktopBridge()) return { defaultBackend: 'auto', allowForkForceDelete: false }
   return invoke<DesktopSettings>('get_settings')
 }
 
@@ -269,6 +270,31 @@ export async function showMainWindow(): Promise<void> {
 
 export async function browseFolder(title: string, defaultPath?: string): Promise<string | null> {
   if (!hasDesktopBridge()) return null
-  const selected = await open({ directory: true, multiple: false, title, defaultPath })
+  // canCreateDirectories is already the macOS default; set explicitly so the
+  // "New Folder" affordance in the native picker doesn't depend on a plugin
+  // default that could change, and so callers browsing to an auto-generated,
+  // not-yet-existing destination (e.g. defaultViewDestination) can still
+  // create it from within the picker instead of only picking existing ones.
+  const selected = await open({ directory: true, multiple: false, title, defaultPath, canCreateDirectories: true })
   return typeof selected === 'string' ? selected : null
+}
+
+// One path segment: lowercased, non-alphanumeric runs collapsed to a single
+// hyphen, leading/trailing hyphens trimmed. Never empty (falls back to
+// "profile") so the generated path is always a valid single segment.
+function slugifyForPath(name: string): string {
+  return name.toLowerCase().replaceAll(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'profile'
+}
+
+function randomDigits(length: number): string {
+  return Array.from({ length }, () => Math.floor(Math.random() * 10)).join('')
+}
+
+// Destination folders for the read-only satellite views (deleted-files,
+// version) don't need to exist beforehand -- the mountos CLI creates its own
+// mount point -- so this only has to produce a plausible, collision-unlikely
+// path, not touch the filesystem.
+export async function defaultViewDestination(profileName: string, kind: string): Promise<string> {
+  const base = await tempDir()
+  return join(base, `${slugifyForPath(profileName)}-${kind}-${randomDigits(6)}`)
 }

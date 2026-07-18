@@ -34,9 +34,9 @@
         <div class="grid gap-4 py-4">
           <p>Mounts a read-only, point-in-time view of this profile's volume ("{appState.snapshotPromptFor.volume || appState.snapshotPromptFor.name}") at a folder you choose. It appears as its own row once ready.</p>
           <div class="grid gap-1.5">
-            <Label>Destination folder</Label>
+            <Label>Destination folder (optional)</Label>
             <div class="flex gap-2">
-              <Input value={appState.snapshotDestination} readonly placeholder="Choose a folder" class="flex-1" />
+              <Input value={appState.snapshotDestination} readonly placeholder="Auto-generated in a temp folder" class="flex-1" />
               <Button type="button" onclick={browseSnapshotDestination} disabled={appState.busy} title="Choose a folder" class="shrink-0">
                 <FolderOpen size={16} aria-hidden="true" />
                 Browse
@@ -72,8 +72,8 @@
           </CommandPreview>
         </div>
         <Dialog.Footer>
-          <Button type="button" variant="outline" class="cyberpunk-skewed-sm" onclick={cancelSnapshotPrompt}>Cancel</Button>
-          <Button type="submit" variant="primary" class="cyberpunk-skewed-sm" disabled={appState.busy || !appState.snapshotDestination || !computed.snapshotTimestampValue}>Open</Button>
+          <Button type="button" variant="outline" onclick={cancelSnapshotPrompt}>Cancel</Button>
+          <Button type="submit" variant="primary" class="cyberpunk-skewed-sm" disabled={appState.busy || !computed.snapshotTimestampValue}>Open</Button>
         </Dialog.Footer>
       </form>
     {/if}

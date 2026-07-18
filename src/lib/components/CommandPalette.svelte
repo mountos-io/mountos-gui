@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { FileArchive, HardDrive, MonitorDot, Plus, RefreshCw, Settings, Unplug } from '@lucide/svelte'
+  import { FileArchive, HardDrive, Lightbulb, MonitorDot, Plus, RefreshCw, Settings, Unplug } from '@lucide/svelte'
   import * as Command from '$lib/components/ui/command'
-  import { appState, createBundle, newProfile, refresh, requestUnmountAll, selectProfile } from '$lib/app-state.svelte'
+  import { appState, createBundle, newProfile, refresh, requestUnmountAll, selectProfile, showTips } from '$lib/app-state.svelte'
   import type { View } from '$lib/app-state.svelte'
 
   let { open = $bindable(false) }: { open?: boolean } = $props()
@@ -69,6 +69,10 @@
       <Command.CommandItem value="Create diagnostics bundle" onSelect={() => run(() => createBundle())}>
         <FileArchive class="mr-2 h-4 w-4" />
         Create diagnostics bundle
+      </Command.CommandItem>
+      <Command.CommandItem value="Tips" onSelect={() => run(showTips)}>
+        <Lightbulb class="mr-2 h-4 w-4" />
+        Tips
       </Command.CommandItem>
     </Command.CommandGroup>
   </Command.CommandList>

@@ -52,5 +52,21 @@ const BACKEND_PASTEL: Partial<Record<Backend, string>> = {
 export function backendBadgeStyle(backend?: string): string {
   const tone = BACKEND_PASTEL[backend as Backend]
   if (!tone) return ''
+  return pastelBadgeStyle(tone)
+}
+
+// Fixed, not derived from the label: the same kind must always read as the
+// same color everywhere it appears (Running Instances row, profile form),
+// rather than picking one of the 7 tones arbitrarily per render.
+const VOLUME_KIND_PASTEL = { general: 'mount', iceberg: 'cloudfilter' } as const
+
+/** Inline style for a color-coded volume-kind Badge (General/Iceberg). */
+export function volumeKindBadgeStyle(kind?: string): string {
+  const tone = VOLUME_KIND_PASTEL[kind as keyof typeof VOLUME_KIND_PASTEL]
+  if (!tone) return ''
+  return pastelBadgeStyle(tone)
+}
+
+function pastelBadgeStyle(tone: string): string {
   return `background: transparent; color: var(--pastel-${tone}-text); border-color: oklch(from var(--pastel-${tone}) l c h / 0.3);`
 }

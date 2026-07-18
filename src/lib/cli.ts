@@ -244,7 +244,11 @@ export function buildDeletedArgv(
   if (idleTimeout?.trim()) argv.push(`--idle-timeout=${idleTimeout.trim()}`)
   pushSatelliteCredentials(argv, profile)
   pushCacheAndExtraArgs(argv, profile)
-  pushViewBackendFlag(argv, profile.backend)
+  // No backend flag: verified against cmd_deleted.go -- deleted/version accept
+  // any backend flag as a root-persistent flag but need none of them to run,
+  // and forcing the primary mount's backend here would wrongly drag along
+  // e.g. FSKit's rigid /Volumes/MountOS/<name> mount-point convention onto an
+  // arbitrary destination folder these views have no reason to share.
   return argv
 }
 
@@ -262,7 +266,7 @@ export function buildVersionArgv(
   if (idleTimeout?.trim()) argv.push(`--idle-timeout=${idleTimeout.trim()}`)
   pushSatelliteCredentials(argv, profile)
   pushCacheAndExtraArgs(argv, profile)
-  pushViewBackendFlag(argv, profile.backend)
+  // No backend flag -- same reasoning as buildDeletedArgv above.
   return argv
 }
 

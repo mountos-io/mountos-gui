@@ -15,7 +15,7 @@
   import type { Backend } from '$lib/types'
   import {
     appState,
-    changeAdvancedOpsEnabled,
+    changeAllowForkForceDelete,
     changeCliPathOverride,
     changeDefaultBackend,
     changeDefaultDiscoveryUrl,
@@ -45,7 +45,10 @@
     ...appState.systemState.terminals.map((option) => ({ value: option.id, label: option.label })),
   ])
   const pollOptions = $derived(
-    POLL_CHOICES.map((seconds) => ({ value: String(seconds), label: `${seconds}s${seconds === DEFAULT_POLL_SECONDS ? ' (default)' : ''}` })),
+    POLL_CHOICES.map((seconds) => ({
+      value: String(seconds),
+      label: seconds === 0 ? 'Off' : `${seconds}s${seconds === DEFAULT_POLL_SECONDS ? ' (default)' : ''}`,
+    })),
   )
 </script>
 
@@ -72,11 +75,11 @@
   <div class="grid gap-3">
     <span class="mono-label">Mounting defaults</span>
     <div class="flex items-center justify-between gap-4">
-      <span class="inline-flex items-center gap-1"><strong>Default backend</strong><InfoTip text="Applied to new profiles. Auto follows the CLI's platform order." /></span>
+      <span class="inline-flex items-center gap-1"><strong>Default backend</strong><InfoTip text="Used for new profiles; Auto follows the CLI's platform order." /></span>
       <Select options={backendOptions} value={appState.settings.defaultBackend} onchange={(value) => changeDefaultBackend(value as Backend)} class="w-48" />
     </div>
     <div class="grid gap-1.5">
-      <span class="inline-flex items-center gap-1"><strong>Default discovery URL</strong><InfoTip text="Seeds new profiles. Each profile can still override it individually; existing profiles are never rewritten when this changes." /></span>
+      <span class="inline-flex items-center gap-1"><strong>Default discovery URL</strong><InfoTip text="Seeds new profiles only; existing ones stay unchanged." /></span>
       <Input type="text" placeholder="https://hub.example.com" value={appState.settings.defaultDiscoveryUrl ?? ''} onchange={(e) => changeDefaultDiscoveryUrl(e.currentTarget.value)} />
     </div>
   </div>
@@ -86,11 +89,11 @@
   <div class="grid gap-3">
     <span class="mono-label">Monitoring &amp; dashboard</span>
     <div class="flex items-center justify-between gap-4">
-      <span class="inline-flex items-center gap-1"><strong>Refresh interval</strong><InfoTip text="How often the running mounts are re-read. A hidden window always backs off to at least 30s regardless." /></span>
+      <span class="inline-flex items-center gap-1"><strong>Refresh interval</strong><InfoTip text="How often mounts refresh. Off disables auto-refresh; use the Refresh button instead." /></span>
       <Select options={pollOptions} value={String(appState.settings.pollSeconds ?? DEFAULT_POLL_SECONDS)} onchange={(value) => changePollSeconds(Number(value))} class="w-48" />
     </div>
     <div class="flex items-center justify-between gap-4">
-      <span class="inline-flex items-center gap-1"><strong>Terminal</strong><InfoTip text="Where the dashboard opens. Only terminals found on this machine are listed. If the one you pick is later uninstalled, the dashboard falls back to the system default instead of failing." /></span>
+      <span class="inline-flex items-center gap-1"><strong>Terminal</strong><InfoTip text="Where the dashboard opens. Falls back to the system default if uninstalled." /></span>
       <Select options={terminalOptions} value={appState.settings.terminal ?? ''} onchange={(value) => changeTerminal(value)} class="w-48" />
     </div>
   </div>
@@ -98,17 +101,21 @@
   <Separator />
 
   <div class="grid gap-3">
-    <span class="mono-label">Safety</span>
+    <span class="mono-label">Miscellaneous</span>
     <div class="flex items-center justify-between gap-4">
-      <span class="inline-flex items-center gap-1"><strong>Skip unmount confirmation</strong><InfoTip text="Unmount and Unmount all act immediately, with no confirmation dialog." /></span>
+      <span class="inline-flex items-center gap-1">
+        <strong>Skip unmount confirmation</strong>
+        <InfoTip text="Skips the confirmation dialog on Unmount and Unmount all." />
+        <Badge variant="warning"><AlertTriangle size={12} aria-hidden="true" />Not recommended</Badge>
+      </span>
       <Checkbox checked={appState.skipUnmountConfirm} onchange={(e) => setSkipUnmountConfirm(e.currentTarget.checked)} />
     </div>
     <div class="flex items-center justify-between gap-4">
-      <span class="inline-flex items-center gap-1"><strong>Fork management</strong><InfoTip text="Adds a Fork management section to the profile editor: fork list/create/delete/restore. Off by default because delete/restore act on shared server-side volume state used by every other mount of the volume, not just this one." /></span>
-      <Checkbox checked={appState.settings.advancedOpsEnabled} onchange={(e) => changeAdvancedOpsEnabled(e.currentTarget.checked)} />
+      <span class="inline-flex items-center gap-1"><strong>Allow force fork delete</strong><InfoTip text="Adds --force to fork delete, removing the whole subtree from the shared volume." /></span>
+      <Checkbox checked={appState.settings.allowForkForceDelete} onchange={(e) => changeAllowForkForceDelete(e.currentTarget.checked)} />
     </div>
-    {#if appState.settings.advancedOpsEnabled}
-      <Callout>Fork delete/restore act on the shared volume, not just this profile. Deleting a fork is recoverable only within its grace period, and --force also removes its entire subtree.</Callout>
+    {#if appState.settings.allowForkForceDelete}
+      <Callout>--force fork delete acts on the shared volume, not just this profile, and also removes the fork's entire subtree. Deleting a fork is recoverable only within its grace period.</Callout>
     {/if}
   </div>
 </section>
@@ -136,7 +143,7 @@
   {/if}
 
   <div class="grid gap-1.5">
-    <span class="inline-flex items-center gap-1"><strong>Pin CLI path</strong><InfoTip text="Overrides the PATH lookup with this exact binary. Leave empty to use the first mountos found on PATH." /></span>
+    <span class="inline-flex items-center gap-1"><strong>Pin CLI path</strong><InfoTip text="Overrides PATH lookup with this exact binary; empty uses PATH." /></span>
     <Input type="text" placeholder={appState.systemState.cliPath ?? '/usr/local/bin/mountos'} value={appState.settings.cliPathOverride ?? ''} onchange={(e) => changeCliPathOverride(e.currentTarget.value)} />
   </div>
 </section>
@@ -192,7 +199,7 @@
   {/if}
 
   <div class="flex items-center justify-between gap-4">
-    <span class="inline-flex items-center gap-1"><strong>Diagnostics bundle</strong><InfoTip text="Writes a JSON file with CLI path and version, check and list output, and your saved profiles." /></span>
+    <span class="inline-flex items-center gap-1"><strong>Diagnostics bundle</strong><InfoTip text="Writes a JSON file with CLI info, check/list output, and saved profiles." /></span>
     <Button type="button" onclick={createBundle} disabled={appState.busy}>
       <FileArchive size={16} aria-hidden="true" />
       Create
