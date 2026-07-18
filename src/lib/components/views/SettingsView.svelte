@@ -101,7 +101,7 @@
   <Separator />
 
   <div class="grid gap-3">
-    <span class="mono-label">Miscellaneous</span>
+    <span class="mono-label">Actions</span>
     <div class="flex items-center justify-between gap-4">
       <span class="inline-flex items-center gap-1">
         <strong>Skip unmount confirmation</strong>
