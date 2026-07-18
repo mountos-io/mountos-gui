@@ -12,7 +12,7 @@ WIN_TARGETS := x86_64-pc-windows-msvc aarch64-pc-windows-msvc
 
 .PHONY: help install dev desktop-dev check test test-rust lint format build desktop-build cli-smoke verify clean \
 	bundle sign-macos notarize-macos sign-windows release-macos release-windows \
-	bump-patch bump-minor bump-major set-version
+	bump-patch bump-minor bump-major set-version licenses
 
 help: ## List every available make command
 	@awk 'BEGIN {FS = ":.*## "; printf "mountOS Desktop commands:\n\n"} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -118,3 +118,6 @@ bump-major: ## Bump package.json + tauri.conf.json major version
 set-version: ## Force an exact version, e.g. make set-version VERSION=1.0.0
 	@test -n "$(VERSION)" || { echo "error: VERSION is required, e.g. make set-version VERSION=1.0.0"; exit 1; }
 	@scripts/bump-version.sh set "$(VERSION)"
+
+licenses: ## Regenerate LICENSES/{rust,js}.json regardless of whether the lockfiles changed
+	@scripts/generate-licenses.sh --force

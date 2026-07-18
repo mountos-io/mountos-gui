@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { Bot, FileArchive, HardDrive, Lightbulb, MonitorDot, Palette, Plus, RefreshCw, Settings, TerminalSquare, Unplug } from '@lucide/svelte'
+  import { Bot, FileArchive, HardDrive, Lightbulb, MonitorDot, Palette, Plus, RefreshCw, ScrollText, Settings, TerminalSquare, Unplug } from '@lucide/svelte'
   import * as Command from '$lib/components/ui/command'
-  import { appState, createBundle, goToSettingsSection, newProfile, refresh, requestUnmountAll, selectProfile, showTips } from '$lib/app-state.svelte'
+  import { appState, createBundle, goToSettingsSection, newProfile, refresh, requestUnmountAll, selectProfile, showLicenses, showTips } from '$lib/app-state.svelte'
   import type { View } from '$lib/app-state.svelte'
 
   let { open = $bindable(false) }: { open?: boolean } = $props()
@@ -81,6 +81,10 @@
       <Command.CommandItem value="Tips" onSelect={() => run(showTips)}>
         <Lightbulb class="mr-2 h-4 w-4" />
         Tips
+      </Command.CommandItem>
+      <Command.CommandItem value="Third party licenses" keywords={['oss', 'open source', 'notices']} onSelect={() => run(showLicenses)}>
+        <ScrollText class="mr-2 h-4 w-4" />
+        Third party licenses
       </Command.CommandItem>
     </Command.CommandGroup>
 

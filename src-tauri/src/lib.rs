@@ -1220,6 +1220,28 @@ async fn mcp_uninstall() -> Result<String, DesktopError> {
         .map_err(|error| DesktopError::Message(format!("mcp uninstall task failed: {error}")))?
 }
 
+// Bundled builds ship LICENSES/ as a Tauri resource; `tauri dev` runs
+// unbundled, so resource_dir() won't have it and we read straight from the
+// repo checkout instead.
+fn licenses_dir(app: &AppHandle) -> Result<PathBuf, DesktopError> {
+    let bundled = app.path().resource_dir()?.join("LICENSES");
+    if bundled.is_dir() {
+        return Ok(bundled);
+    }
+    Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../LICENSES"))
+}
+
+#[tauri::command]
+fn get_third_party_licenses(app: AppHandle, kind: String) -> Result<Value, DesktopError> {
+    let file_name = match kind.as_str() {
+        "rust" => "rust.json",
+        "js" => "js.json",
+        _ => return Err(DesktopError::Message(format!("unknown license kind: {kind}"))),
+    };
+    let content = fs::read_to_string(licenses_dir(&app)?.join(file_name))?;
+    Ok(serde_json::from_str(&content)?)
+}
+
 fn cli_version() -> Option<String> {
     command_output(&["--version"]).ok().and_then(|output| {
         let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -3639,6 +3661,7 @@ pub fn run() {
             mcp_install,
             mcp_uninstall,
             mount_help,
+            get_third_party_licenses,
             show_main_window,
         ])
         .run(tauri::generate_context!())

@@ -199,3 +199,20 @@ export interface UnmountAllResult {
   attempted: number
   failed: string[]
 }
+
+export interface LicensedPackage {
+  name: string
+  version: string
+  repository: string | null
+}
+
+export interface LicenseGroup {
+  id: string
+  name: string
+  text: string
+  packages: LicensedPackage[]
+}
+
+export interface ThirdPartyLicenses {
+  licenses: LicenseGroup[]
+}

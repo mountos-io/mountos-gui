@@ -19,6 +19,7 @@
   import ForkDeleteDialog from '$lib/components/dialogs/ForkDeleteDialog.svelte'
   import ForkRestoreDialog from '$lib/components/dialogs/ForkRestoreDialog.svelte'
   import TipsDialog from '$lib/components/dialogs/TipsDialog.svelte'
+  import ThirdPartyLicensesDialog from '$lib/components/dialogs/ThirdPartyLicensesDialog.svelte'
   import CommandPalette from '$lib/components/CommandPalette.svelte'
   import {
     appState,
@@ -235,3 +236,4 @@
 <ForkDeleteDialog />
 <ForkRestoreDialog />
 <TipsDialog />
+<ThirdPartyLicensesDialog />

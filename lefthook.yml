@@ -1,0 +1,4 @@
+pre-commit:
+  commands:
+    update-licenses:
+      run: ./scripts/generate-licenses.sh

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { AlertTriangle, Bot, FileArchive, FolderOpen, Monitor, Moon, RefreshCw, ShieldCheck, Sun } from '@lucide/svelte'
+  import { AlertTriangle, Bot, FileArchive, FolderOpen, Monitor, Moon, RefreshCw, ScrollText, ShieldCheck, Sun } from '@lucide/svelte'
   import { Button } from '$lib/components/ui/button'
   import { Input } from '$lib/components/ui/input'
   import { Label } from '$lib/components/ui/label'
@@ -31,6 +31,7 @@
     POLL_CHOICES,
     refresh,
     setSkipUnmountConfirm,
+    showLicenses,
     uninstallMcp,
   } from '$lib/app-state.svelte'
 
@@ -172,6 +173,13 @@
   <div class="grid gap-1.5">
     <span class="inline-flex items-center gap-1"><strong>Pin CLI path</strong><InfoTip text="Overrides PATH lookup with this exact binary; empty uses PATH." /></span>
     <Input type="text" placeholder={appState.systemState.cliPath ?? '/usr/local/bin/mountos'} value={appState.settings.cliPathOverride ?? ''} onchange={(e) => changeCliPathOverride(e.currentTarget.value)} />
+  </div>
+  <div class="flex items-center justify-between gap-4">
+    <span><strong>Third party licenses</strong></span>
+    <Button type="button" variant="outline" onclick={showLicenses}>
+      <ScrollText size={16} aria-hidden="true" />
+      View
+    </Button>
   </div>
 </section>
 

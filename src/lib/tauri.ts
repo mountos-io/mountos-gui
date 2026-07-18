@@ -12,6 +12,7 @@ import type {
   MountResult,
   SecretStatus,
   SystemState,
+  ThirdPartyLicenses,
   UnmountResult,
   UnmountAllResult,
 } from './types'
@@ -261,6 +262,11 @@ export async function mcpUninstall(): Promise<string> {
 export async function mountHelp(): Promise<string> {
   if (!hasDesktopBridge()) throw new Error('Desktop bridge unavailable')
   return invoke<string>('mount_help')
+}
+
+export async function getThirdPartyLicenses(kind: 'rust' | 'js'): Promise<ThirdPartyLicenses> {
+  if (!hasDesktopBridge()) throw new Error('Desktop bridge unavailable')
+  return invoke<ThirdPartyLicenses>('get_third_party_licenses', { kind })
 }
 
 export async function showMainWindow(): Promise<void> {

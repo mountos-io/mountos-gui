@@ -35,6 +35,7 @@ import {
   getProfileSecretStatus,
   getSettings,
   getSystemState,
+  getThirdPartyLicenses,
   launchDashboard,
   listProfiles,
   mcpInstall,
@@ -64,6 +65,7 @@ import type {
   MountInstance,
   MountProfile,
   SystemState,
+  ThirdPartyLicenses,
 } from './types'
 
 export type View = 'instances' | 'profiles' | 'settings'
@@ -136,6 +138,11 @@ const state = $state({
   sidebarCollapsed: initialSidebarCollapsed(),
   skipUnmountConfirm: initialSkipUnmountConfirm(),
   tipsOpen: false,
+  licensesOpen: false,
+  licensesKind: 'rust' as 'rust' | 'js',
+  licensesLoading: false,
+  licensesError: '',
+  licensesData: {} as Partial<Record<'rust' | 'js', ThirdPartyLicenses>>,
 
   // Secret prompt (mount)
   secretPromptFor: null as string | null,
@@ -1460,6 +1467,33 @@ export function showTips() {
 
 export function hideTips() {
   state.tipsOpen = false
+}
+
+async function loadLicenses(kind: 'rust' | 'js') {
+  if (state.licensesData[kind]) return
+  state.licensesLoading = true
+  state.licensesError = ''
+  try {
+    state.licensesData[kind] = await getThirdPartyLicenses(kind)
+  } catch (error) {
+    state.licensesError = error instanceof Error ? error.message : 'Failed to load licenses'
+  } finally {
+    state.licensesLoading = false
+  }
+}
+
+export async function showLicenses() {
+  state.licensesOpen = true
+  await loadLicenses(state.licensesKind)
+}
+
+export function hideLicenses() {
+  state.licensesOpen = false
+}
+
+export function setLicensesKind(kind: 'rust' | 'js') {
+  state.licensesKind = kind
+  void loadLicenses(kind)
 }
 
 // Jumps to Settings and scrolls the matching section into view. tick() waits
