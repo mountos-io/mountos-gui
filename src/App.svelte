@@ -69,6 +69,11 @@
     if (modPressed && !event.shiftKey && event.key.toLowerCase() === 'r' && !inInput) {
       event.preventDefault()
       void refresh()
+      return
+    }
+    if (modPressed && !event.shiftKey && event.key.toLowerCase() === 'n' && !inInput) {
+      event.preventDefault()
+      newProfile()
     }
   }
 

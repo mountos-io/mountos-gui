@@ -17,6 +17,7 @@
   const settingsShortcut = $derived(mac ? '⌘,' : 'Ctrl+,')
   const sidebarShortcut = $derived(mac ? '⌘B' : 'Ctrl+B')
   const refreshShortcut = $derived(mac ? '⌘R' : 'Ctrl+R')
+  const newProfileShortcut = $derived(mac ? '⌘N' : 'Ctrl+N')
 
   function run(action: () => void) {
     open = false
@@ -74,6 +75,7 @@
       <Command.CommandItem value="New profile" onSelect={() => run(() => newProfile())}>
         <Plus class="mr-2 h-4 w-4" />
         New profile
+        <Command.CommandShortcut>{newProfileShortcut}</Command.CommandShortcut>
       </Command.CommandItem>
       <Command.CommandItem
         value="Unmount all"
