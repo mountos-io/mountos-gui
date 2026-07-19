@@ -651,11 +651,35 @@ fn push_view_backend_flag(argv: &mut Vec<String>, backend: &Backend) {
 // column, sourced from `mountos list`'s own Name field) a label that visibly
 // differs from the parent mount, so a snapshot/deleted/version row is never
 // mistaken for a second copy of the real volume.
+// Short, collision-unlikely digit suffix. Not cryptographically random --
+// just needs to differ across satellite mounts of the same profile, same
+// role subsec_nanos plays for the destination-folder suffix already
+// generated frontend-side (see defaultViewDestination's randomDigits).
+fn satellite_suffix() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    format!("{:04}", nanos % 10000)
+}
+
 fn satellite_volname(profile: &MountProfile, kind: &str) -> String {
+    // Short and non-linguistic: "(deleted)"/"(snapshot)"/"(version)" reads
+    // fine once, but this label shows up in Finder/Explorer, `mountos list`,
+    // and the GUI's own instance rows every time a satellite view is opened,
+    // and a plain kind name never disambiguates two deleted-view mounts of
+    // the same profile from each other.
+    let abbrev = match kind {
+        "snapshot" => "snap",
+        "deleted" => "del",
+        "version" => "ver",
+        other => other,
+    };
+    let suffix = satellite_suffix();
     if profile.volume.is_empty() {
-        format!("mountOS {kind}")
+        format!("mountOS-{abbrev}-{suffix}")
     } else {
-        format!("{} ({kind})", profile.volume)
+        format!("{}-{}-{}", profile.volume, abbrev, suffix)
     }
 }
 
@@ -4090,9 +4114,13 @@ mod tests {
     #[test]
     fn satellite_volname_falls_back_when_profile_volume_empty() {
         let mut p = profile();
-        assert_eq!(satellite_volname(&p, "snapshot"), "Team files (snapshot)");
+        let snap = satellite_volname(&p, "snapshot");
+        assert!(snap.starts_with("Team files-snap-"), "{snap}");
+        assert_eq!(snap.len(), "Team files-snap-".len() + 4);
         p.volume = String::new();
-        assert_eq!(satellite_volname(&p, "deleted"), "mountOS deleted");
+        let deleted = satellite_volname(&p, "deleted");
+        assert!(deleted.starts_with("mountOS-del-"), "{deleted}");
+        assert_eq!(deleted.len(), "mountOS-del-".len() + 4);
     }
 
     #[test]
