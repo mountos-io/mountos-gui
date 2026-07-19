@@ -59,6 +59,16 @@
     if (modPressed && !event.shiftKey && event.key === ',' && !inInput) {
       event.preventDefault()
       appState.view = 'settings'
+      return
+    }
+    if (modPressed && !event.shiftKey && event.key.toLowerCase() === 'b' && !inInput) {
+      event.preventDefault()
+      toggleSidebar()
+      return
+    }
+    if (modPressed && !event.shiftKey && event.key.toLowerCase() === 'r' && !inInput) {
+      event.preventDefault()
+      void refresh()
     }
   }
 

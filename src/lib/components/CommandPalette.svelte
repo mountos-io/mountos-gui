@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { Bot, FileArchive, HardDrive, Lightbulb, MonitorDot, Palette, Plus, RefreshCw, ScrollText, Settings, TerminalSquare, Unplug } from '@lucide/svelte'
+  import { Bot, FileArchive, HardDrive, Lightbulb, MonitorDot, Palette, PanelLeft, Plus, RefreshCw, ScrollText, Settings, TerminalSquare, Unplug } from '@lucide/svelte'
   import * as Command from '$lib/components/ui/command'
-  import { appState, createBundle, goToSettingsSection, newProfile, refresh, requestUnmountAll, selectProfile, showLicenses, showTips } from '$lib/app-state.svelte'
+  import { appState, createBundle, goToSettingsSection, newProfile, refresh, requestUnmountAll, selectProfile, showLicenses, showTips, toggleSidebar } from '$lib/app-state.svelte'
   import type { View } from '$lib/app-state.svelte'
   import { isMacPlatform } from '$lib/utils'
 
@@ -13,7 +13,10 @@
     { id: 'settings', label: 'Settings', icon: Settings },
   ]
 
-  const settingsShortcut = $derived(isMacPlatform(appState.systemState.platform) ? '⌘,' : 'Ctrl+,')
+  const mac = $derived(isMacPlatform(appState.systemState.platform))
+  const settingsShortcut = $derived(mac ? '⌘,' : 'Ctrl+,')
+  const sidebarShortcut = $derived(mac ? '⌘B' : 'Ctrl+B')
+  const refreshShortcut = $derived(mac ? '⌘R' : 'Ctrl+R')
 
   function run(action: () => void) {
     open = false
@@ -58,9 +61,15 @@
     <Command.CommandSeparator />
 
     <Command.CommandGroup heading="Actions">
-      <Command.CommandItem value="Refresh" onSelect={() => run(() => refresh())}>
+      <Command.CommandItem value="Toggle sidebar" onSelect={() => run(toggleSidebar)}>
+        <PanelLeft class="mr-2 h-4 w-4" />
+        Toggle sidebar
+        <Command.CommandShortcut>{sidebarShortcut}</Command.CommandShortcut>
+      </Command.CommandItem>
+      <Command.CommandItem value="Refresh running instances" onSelect={() => run(() => refresh())}>
         <RefreshCw class="mr-2 h-4 w-4" />
-        Refresh
+        Refresh running instances
+        <Command.CommandShortcut>{refreshShortcut}</Command.CommandShortcut>
       </Command.CommandItem>
       <Command.CommandItem value="New profile" onSelect={() => run(() => newProfile())}>
         <Plus class="mr-2 h-4 w-4" />

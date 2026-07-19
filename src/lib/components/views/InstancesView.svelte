@@ -295,7 +295,8 @@
             <Table.Cell colspan={5}>
               <div class="tech-grid grid gap-1.5 p-7 text-center">
                 <strong>No instances</strong>
-                <p>Mount a saved profile, or mount from the CLI; active mounts appear here after refresh.</p>
+                <p>Mount a saved profile, or mount from the CLI.</p>
+                <p>Active mounts appear here after refresh.</p>
               </div>
             </Table.Cell>
           </Table.Row>
