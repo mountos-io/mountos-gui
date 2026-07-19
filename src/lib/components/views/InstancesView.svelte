@@ -117,11 +117,20 @@
                 <strong>{instance.name || instance.volumeId || 'mountOS volume'}</strong>
                 {#if viewModeBadge(instance.viewMode)}
                   <Badge>{viewModeBadge(instance.viewMode)}</Badge>
+                {:else if instance.viewMode === 'r'}
+                  <!-- Only for a plain read-only regular mount: a satellite
+                       view (Deleted/Version/Snapshot, above) is inherently
+                       read-only already, so it gets its own distinct badge
+                       instead of this one too. -->
+                  <Badge variant="secondary">Read only</Badge>
                 {/if}
                 {#if volumeKindFor(instance)}
                   <Badge variant="secondary" style={volumeKindBadgeStyle(volumeKindFor(instance))} title="Volume kind, detected from the mount itself">
                     {volumeKindFor(instance) === 'iceberg' ? 'Iceberg' : 'General'}
                   </Badge>
+                {/if}
+                {#if instance.temporaryFork}
+                  <Badge variant="warning" title="This mount is on a temporary fork, cleaned up when it's deleted">Temp fork</Badge>
                 {/if}
                 {#if gatewayInfoForInstance(instance)}
                   <Badge title="This mount also has an S3/HDFS gateway running, launched from this app">Gateway</Badge>

@@ -73,6 +73,8 @@ export interface MountInstance {
   mountTime?: string
   /** "general"/"iceberg" from this instance's own .mountOS/.config -- unlike MountProfile.volumeKind, works for external mounts too. */
   volumeKind?: string
+  /** From this instance's own .mountOS/.config; not in `mountos list --json` at all. */
+  temporaryFork?: boolean
   external: boolean
   /** Saved profile matching this mount's path, if any. `external` is this being absent. */
   profileId?: string

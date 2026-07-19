@@ -122,6 +122,7 @@ struct MountInstance {
     // works for external mounts too, unlike MountProfile's own volume_kind
     // field, which only ever populates for profile-backed mounts.
     volume_kind: Option<String>,
+    temporary_fork: Option<bool>,
     external: bool,
     // Id of the saved profile whose mount path matches this mount, if any.
     // external is simply this being absent.
@@ -1449,6 +1450,7 @@ fn parse_instances_value(value: &Value) -> Vec<MountInstance> {
                 // -- listing alone can't know any of them.
                 mount_time: None,
                 volume_kind: None,
+                temporary_fork: None,
                 external: true,
                 profile_id: None,
                 health: if orphaned == Some(true) {
@@ -1830,6 +1832,7 @@ fn get_system_state_blocking(app: AppHandle) -> Result<SystemState, DesktopError
         let extras = read_instance_config_extras(&instance.mount_path);
         instance.mount_time = extras.mount_time;
         instance.volume_kind = extras.volume_kind;
+        instance.temporary_fork = extras.temporary_fork;
     }
     let cli_path_alternates = other_cli_paths_on_path(cli_path.as_deref());
     Ok(SystemState {
@@ -2965,10 +2968,14 @@ struct InstanceConfigExtras {
     // profile) has no such record, so its badge would never show without a
     // second, profile-independent source. Same "general"/"iceberg" casing.
     volume_kind: Option<String>,
+    // Not in `mountos list --json` at all (confirmed) -- server-side this is
+    // MountConfig.TemporaryFork (mfusetypes/types.go), a bool, distinct from
+    // the same struct's ForkName string.
+    temporary_fork: Option<bool>,
 }
 
 fn read_instance_config_extras(mount_path: &str) -> InstanceConfigExtras {
-    let empty = InstanceConfigExtras { mount_time: None, volume_kind: None };
+    let empty = InstanceConfigExtras { mount_time: None, volume_kind: None, temporary_fork: None };
     let config_path = PathBuf::from(mount_path).join(".mountOS").join(".config");
     let Ok(bytes) = fs::read(&config_path) else {
         return empty;
@@ -2979,6 +2986,7 @@ fn read_instance_config_extras(mount_path: &str) -> InstanceConfigExtras {
     InstanceConfigExtras {
         mount_time: value.get("mountTime").and_then(Value::as_str).map(ToString::to_string),
         volume_kind: value.get("volumeType").and_then(Value::as_str).map(ToString::to_string),
+        temporary_fork: value.get("isTemporaryFork").and_then(Value::as_bool),
     }
 }
 
