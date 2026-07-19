@@ -121,23 +121,28 @@
     <div class="grid gap-1.5">
       <div class="flex items-center justify-between gap-4">
         <span class="inline-flex items-center gap-1"><strong>Brightness</strong><InfoTip text="Dims or brightens the whole app." /></span>
-        <span class="mono-label">{themeState.brightness}%</span>
+        <div class="flex items-center gap-2">
+          <span class="mono-label">{themeState.brightness}%</span>
+          <!-- Next to the percentage, not sharing the slider's own row: that
+               row is the only element there, so Reset mounting/unmounting no
+               longer changes the slider's width -- it used to sit alongside
+               the slider in a flex row, visibly shrinking (and un-shrinking)
+               the track and jumping the thumb under the cursor mid-drag. -->
+          {#if themeState.brightness !== 100}
+            <Button type="button" size="sm" variant="ghost" onclick={() => setBrightness(100)}>Reset</Button>
+          {/if}
+        </div>
       </div>
-      <div class="flex items-center gap-2">
-        <input
-          type="range"
-          min="50"
-          max="150"
-          step="5"
-          value={themeState.brightness}
-          oninput={(e) => setBrightness(Number(e.currentTarget.value))}
-          aria-label="Brightness"
-          class="w-full accent-primary"
-        />
-        {#if themeState.brightness !== 100}
-          <Button type="button" size="sm" variant="ghost" onclick={() => setBrightness(100)}>Reset</Button>
-        {/if}
-      </div>
+      <input
+        type="range"
+        min="50"
+        max="150"
+        step="5"
+        value={themeState.brightness}
+        oninput={(e) => setBrightness(Number(e.currentTarget.value))}
+        aria-label="Brightness"
+        class="w-full accent-primary"
+      />
     </div>
   </div>
 

@@ -3,7 +3,7 @@
   import Toaster from '$lib/components/Toaster.svelte'
   import { Button } from '$lib/components/ui/button'
   import * as Breadcrumb from '$lib/components/ui/breadcrumb'
-  import { cn } from '$lib/utils'
+  import { cn, modKeyPressed } from '$lib/utils'
   import { initThemeSync } from '$lib/theme.svelte'
   import InstancesView from '$lib/components/views/InstancesView.svelte'
   import ProfilesView from '$lib/components/views/ProfilesView.svelte'
@@ -46,9 +46,19 @@
   let commandPaletteOpen = $state(false)
 
   function handleGlobalKeydown(event: KeyboardEvent) {
-    if (event.metaKey && !event.shiftKey && event.key.toLowerCase() === 'k') {
+    const modPressed = modKeyPressed(event, appState.systemState.platform)
+    if (modPressed && !event.shiftKey && event.key.toLowerCase() === 'k') {
       event.preventDefault()
       commandPaletteOpen = true
+      return
+    }
+    // Unlike Cmd+K, guarded against firing while typing -- a bare "," is a
+    // real character in plenty of fields (extra args, discovery URLs).
+    const target = event.target as HTMLElement
+    const inInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
+    if (modPressed && !event.shiftKey && event.key === ',' && !inInput) {
+      event.preventDefault()
+      appState.view = 'settings'
     }
   }
 

@@ -3,6 +3,7 @@
   import * as Command from '$lib/components/ui/command'
   import { appState, createBundle, goToSettingsSection, newProfile, refresh, requestUnmountAll, selectProfile, showLicenses, showTips } from '$lib/app-state.svelte'
   import type { View } from '$lib/app-state.svelte'
+  import { isMacPlatform } from '$lib/utils'
 
   let { open = $bindable(false) }: { open?: boolean } = $props()
 
@@ -11,6 +12,8 @@
     { id: 'profiles', label: 'Profiles', icon: HardDrive },
     { id: 'settings', label: 'Settings', icon: Settings },
   ]
+
+  const settingsShortcut = $derived(isMacPlatform(appState.systemState.platform) ? '⌘,' : 'Ctrl+,')
 
   function run(action: () => void) {
     open = false
@@ -28,6 +31,9 @@
         <Command.CommandItem value={item.label} onSelect={() => run(() => (appState.view = item.id))}>
           <item.icon class="mr-2 h-4 w-4" />
           {item.label}
+          {#if item.id === 'settings'}
+            <Command.CommandShortcut>{settingsShortcut}</Command.CommandShortcut>
+          {/if}
         </Command.CommandItem>
       {/each}
     </Command.CommandGroup>
