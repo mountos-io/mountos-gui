@@ -118,6 +118,10 @@ struct MountInstance {
     // viewMode/backend/etc only) -- filled in afterward from each instance's
     // own .mountOS/.config, the same file get_instance_config reads.
     mount_time: Option<String>,
+    // Also read live from .mountOS/.config (InstanceConfigExtras, below) --
+    // works for external mounts too, unlike MountProfile's own volume_kind
+    // field, which only ever populates for profile-backed mounts.
+    volume_kind: Option<String>,
     external: bool,
     // Id of the saved profile whose mount path matches this mount, if any.
     // external is simply this being absent.
@@ -1441,9 +1445,10 @@ fn parse_instances_value(value: &Value) -> Vec<MountInstance> {
                     .and_then(Value::as_str)
                     .map(ToString::to_string),
                 orphaned,
-                // All three are filled in / corrected afterward in
-                // get_system_state -- listing alone can't know any of them.
+                // All are filled in / corrected afterward in get_system_state
+                // -- listing alone can't know any of them.
                 mount_time: None,
+                volume_kind: None,
                 external: true,
                 profile_id: None,
                 health: if orphaned == Some(true) {
@@ -1822,7 +1827,9 @@ fn get_system_state_blocking(app: AppHandle) -> Result<SystemState, DesktopError
             .find(|(_, target)| targets_equal(target, &instance.mount_path))
             .map(|(id, _)| id.clone());
         instance.external = instance.profile_id.is_none();
-        instance.mount_time = read_mount_time(&instance.mount_path);
+        let extras = read_instance_config_extras(&instance.mount_path);
+        instance.mount_time = extras.mount_time;
+        instance.volume_kind = extras.volume_kind;
     }
     let cli_path_alternates = other_cli_paths_on_path(cli_path.as_deref());
     Ok(SystemState {
@@ -2944,19 +2951,35 @@ async fn unmount_all_targets() -> Result<UnmountAllResult, DesktopError> {
         .map_err(|error| DesktopError::Message(format!("unmount-all task failed: {error}")))?
 }
 
-// Best-effort mountTime read for the instances list poll: every instance
-// gets this on every refresh, so failures (unmounted mid-read, no .config
-// yet, unexpected shape) fall back to None rather than failing the whole
-// list -- an uptime badge that's occasionally missing beats one that takes
-// the entire Instances view down with it.
-fn read_mount_time(mount_path: &str) -> Option<String> {
+// Best-effort read for the instances list poll: every instance gets this on
+// every refresh, so failures (unmounted mid-read, no .config yet, unexpected
+// shape) fall back to None rather than failing the whole list -- an uptime
+// or volume-kind badge that's occasionally missing beats one that takes the
+// entire Instances view down with it.
+struct InstanceConfigExtras {
+    mount_time: Option<String>,
+    // Read straight off the live mount, not the profile's own persisted
+    // volume_kind (require_stable_identity/detect_and_persist_volume_kind,
+    // above): that path only ever populates for profile-backed mounts, since
+    // it needs a MountProfile to persist onto. An external mount (no saved
+    // profile) has no such record, so its badge would never show without a
+    // second, profile-independent source. Same "general"/"iceberg" casing.
+    volume_kind: Option<String>,
+}
+
+fn read_instance_config_extras(mount_path: &str) -> InstanceConfigExtras {
+    let empty = InstanceConfigExtras { mount_time: None, volume_kind: None };
     let config_path = PathBuf::from(mount_path).join(".mountOS").join(".config");
-    let bytes = fs::read(&config_path).ok()?;
-    let value: Value = serde_json::from_slice(&bytes).ok()?;
-    value
-        .get("mountTime")
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
+    let Ok(bytes) = fs::read(&config_path) else {
+        return empty;
+    };
+    let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
+        return empty;
+    };
+    InstanceConfigExtras {
+        mount_time: value.get("mountTime").and_then(Value::as_str).map(ToString::to_string),
+        volume_kind: value.get("volumeType").and_then(Value::as_str).map(ToString::to_string),
+    }
 }
 
 // Reads .mountOS/.config directly off disk rather than shelling out — it's

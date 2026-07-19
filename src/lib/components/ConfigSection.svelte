@@ -27,7 +27,11 @@
   <!-- Only ever set on a recursive (nested-object) call, never the root --
        the border+top-padding is what makes a nested category read as a new
        section instead of just another row trailing the parent's own list. -->
-  {#if title}<p class="mono-label border-t border-border/40 pt-2.5">{title}</p>{/if}
+  {#if title}
+    <p class="mono-label border-t border-border/40 pt-2.5">
+      <span class="text-primary">⌜</span> {title} <span class="text-primary">⌟</span>
+    </p>
+  {/if}
 
   {#if primitives.length}
     <dl class="m-0 grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1.5">

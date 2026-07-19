@@ -44,6 +44,14 @@
     stopGatewayLaunch,
     toggleInstanceConfig,
   } from '$lib/app-state.svelte'
+
+  // Prefers the live read off the mount's own .mountOS/.config
+  // (instance.volumeKind): it works for external mounts too, unlike the
+  // profile's own cached volumeKind, which only ever populates for
+  // profile-backed mounts (see detect_and_persist_volume_kind server-side).
+  function volumeKindFor(instance: MountInstance): string | undefined {
+    return instance.volumeKind ?? profileForInstance(instance)?.volumeKind
+  }
 </script>
 
 <div class="corner-brackets relative border border-border/30 m-[22px] mb-0 p-4">
@@ -110,9 +118,9 @@
                 {#if viewModeBadge(instance.viewMode)}
                   <Badge>{viewModeBadge(instance.viewMode)}</Badge>
                 {/if}
-                {#if profileForInstance(instance)?.volumeKind}
-                  <Badge variant="secondary" style={volumeKindBadgeStyle(profileForInstance(instance)?.volumeKind)} title="Volume kind, detected from the mount itself">
-                    {profileForInstance(instance)?.volumeKind === 'iceberg' ? 'Iceberg' : 'General'}
+                {#if volumeKindFor(instance)}
+                  <Badge variant="secondary" style={volumeKindBadgeStyle(volumeKindFor(instance))} title="Volume kind, detected from the mount itself">
+                    {volumeKindFor(instance) === 'iceberg' ? 'Iceberg' : 'General'}
                   </Badge>
                 {/if}
                 {#if gatewayInfoForInstance(instance)}
@@ -139,8 +147,8 @@
                   <Button
                     variant="outline"
                     size="icon"
-                    title={instance.key in appState.expandedConfig ? 'Hide mount flags' : 'Show mount flags'}
-                    aria-label={instance.key in appState.expandedConfig ? 'Hide mount flags' : 'Show mount flags'}
+                    title={instance.key in appState.expandedConfig ? 'Hide Configuration' : 'Show Configuration'}
+                    aria-label={instance.key in appState.expandedConfig ? 'Hide Configuration' : 'Show Configuration'}
                     aria-expanded={instance.key in appState.expandedConfig}
                     disabled={appState.busy}
                     onclick={() => toggleInstanceConfig(instance)}

@@ -71,6 +71,8 @@ export interface MountInstance {
   orphaned?: boolean
   /** ISO timestamp from this instance's own .mountOS/.config, read fresh on every poll. */
   mountTime?: string
+  /** "general"/"iceberg" from this instance's own .mountOS/.config -- unlike MountProfile.volumeKind, works for external mounts too. */
+  volumeKind?: string
   external: boolean
   /** Saved profile matching this mount's path, if any. `external` is this being absent. */
   profileId?: string
