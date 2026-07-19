@@ -16,7 +16,7 @@
   })
 </script>
 
-<div class="relative overflow-auto border border-border bg-card">
+<div class="relative overflow-auto border border-border">
   <div class="tech-grid absolute inset-0 pointer-events-none" aria-hidden="true"></div>
   <div class="relative grid gap-2 p-2.5">
     <div class="flex items-center justify-between gap-2.5">

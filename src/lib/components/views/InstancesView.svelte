@@ -52,6 +52,14 @@
   function volumeKindFor(instance: MountInstance): string | undefined {
     return instance.volumeKind ?? profileForInstance(instance)?.volumeKind
   }
+
+  // "Open folder" moved to a direct action button, so it's no longer the one
+  // unconditional item keeping this menu non-empty -- without this check the
+  // dropdown trigger would open onto nothing for an instance with no other
+  // applicable item (not openable, no deleted/version view, no gateway).
+  function hasMoreActions(instance: MountInstance): boolean {
+    return canOpen(instance) || canOpenViewsFor(instance) || Boolean(gatewayInfoForInstance(instance)?.pid)
+  }
 </script>
 
 <div class="corner-brackets relative border border-border/30 m-[22px] mb-0 p-4">
@@ -84,6 +92,7 @@
   <Table.Root containerLabel="Running instances">
     <Table.Header>
       <Table.Row>
+        <Table.Head class="th-cyber w-8"></Table.Head>
         <Table.Head class="th-cyber">Name</Table.Head>
         <Table.Head class="th-cyber">Target</Table.Head>
         <Table.Head class="th-cyber">Backend</Table.Head>
@@ -94,6 +103,7 @@
       {#if !appState.loaded}
         {#each { length: 3 } as _placeholder}
           <Table.Row aria-hidden="true">
+            <Table.Cell><Skeleton class="h-5 w-5" /></Table.Cell>
             <Table.Cell><Skeleton class="h-5 w-32" /></Table.Cell>
             <Table.Cell><Skeleton class="h-5 w-64" /></Table.Cell>
             <Table.Cell><Skeleton class="h-5 w-20" /></Table.Cell>
@@ -103,7 +113,25 @@
       {:else}
         {#each computed.filteredInstances as instance (instance.key)}
           <Table.Row>
-            <Table.Cell>
+            <Table.Cell class="text-muted-foreground">
+              {#if canOpen(instance)}
+                <button
+                  type="button"
+                  class="inline-flex items-center justify-center p-2 -m-1 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  title={instance.key in appState.expandedConfig ? 'Hide Configuration' : 'Show Configuration'}
+                  aria-label={instance.key in appState.expandedConfig ? 'Hide Configuration' : 'Show Configuration'}
+                  aria-expanded={instance.key in appState.expandedConfig}
+                  disabled={appState.busy}
+                  onclick={() => toggleInstanceConfig(instance)}
+                >
+                  {#if instance.key in appState.expandedConfig}<ChevronDown size={16} aria-hidden="true" />{:else}<ChevronRight size={16} aria-hidden="true" />{/if}
+                </button>
+              {/if}
+            </Table.Cell>
+            <Table.Cell
+              class={canOpen(instance) ? 'cursor-pointer' : ''}
+              onclick={() => canOpen(instance) && toggleInstanceConfig(instance)}
+            >
               <span class="flex flex-wrap items-center gap-2">
                 <!-- title for pointer users; the sr-only text is what makes
                      this readable at all without colour vision or a mouse,
@@ -152,22 +180,13 @@
             <Table.Cell><Badge variant="secondary" style={backendBadgeStyle(instance.backend)}>{instance.backend ?? 'unknown'}</Badge></Table.Cell>
             <Table.Cell>
               <div class="flex flex-nowrap items-center gap-2">
-                {#if canOpen(instance)}
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    title={instance.key in appState.expandedConfig ? 'Hide Configuration' : 'Show Configuration'}
-                    aria-label={instance.key in appState.expandedConfig ? 'Hide Configuration' : 'Show Configuration'}
-                    aria-expanded={instance.key in appState.expandedConfig}
-                    disabled={appState.busy}
-                    onclick={() => toggleInstanceConfig(instance)}
-                  >
-                    {#if instance.key in appState.expandedConfig}<ChevronDown size={16} aria-hidden="true" />{:else}<ChevronRight size={16} aria-hidden="true" />{/if}
-                  </Button>
-                {/if}
+                <Button variant="outline" size="icon" title="Open folder" aria-label="Open folder" disabled={appState.busy || !canOpen(instance)} onclick={() => runOpen(instance)}>
+                  <FolderOpen size={16} aria-hidden="true" />
+                </Button>
                 <Button variant="destructive" size="icon" title="Unmount" aria-label="Unmount" disabled={appState.busy} onclick={() => requestUnmount(instance)}>
                   <Unplug size={16} aria-hidden="true" />
                 </Button>
+                {#if hasMoreActions(instance)}
                 <DropdownMenu.Root>
                   <DropdownMenu.Trigger>
                     {#snippet child({ props })}
@@ -182,13 +201,6 @@
                       sideOffset={6}
                       class="z-50 min-w-[200px] border border-border bg-popover p-1 text-popover-foreground"
                     >
-                      <DropdownMenu.Item
-                        class="flex cursor-pointer items-center gap-2 px-4 py-2 text-sm outline-none data-disabled:pointer-events-none data-disabled:opacity-50 data-highlighted:bg-accent"
-                        disabled={appState.busy || !canOpen(instance)}
-                        onSelect={() => runOpen(instance)}
-                      >
-                        <FolderOpen size={16} aria-hidden="true" /> Open folder
-                      </DropdownMenu.Item>
                       {#if canOpen(instance)}
                         <DropdownMenu.Item
                           class="flex cursor-pointer items-center gap-2 px-4 py-2 text-sm outline-none data-highlighted:bg-accent"
@@ -258,19 +270,20 @@
                     </DropdownMenu.Content>
                   </DropdownMenu.Portal>
                 </DropdownMenu.Root>
+                {/if}
               </div>
             </Table.Cell>
           </Table.Row>
           {#if instance.key in appState.expandedConfig}
             <Table.Row>
-              <Table.Cell colspan={4} class="bg-muted">
+              <Table.Cell colspan={5}>
                 <InstanceConfigPanel raw={appState.expandedConfig[instance.key]} onCopy={() => copyConfig(instance.key)} />
               </Table.Cell>
             </Table.Row>
           {/if}
         {:else}
           <Table.Row>
-            <Table.Cell colspan={4}>
+            <Table.Cell colspan={5}>
               <div class="tech-grid grid gap-1.5 p-7 text-center">
                 <strong>No instances</strong>
                 <p>Mount a saved profile, or mount from the CLI; active mounts appear here after refresh.</p>
