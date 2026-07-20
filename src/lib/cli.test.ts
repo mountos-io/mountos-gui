@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import {
-  backendNeedsMountPath,
   buildDeletedArgv,
   buildForkCreateArgv,
   buildForkDeleteArgv,
@@ -66,11 +65,6 @@ describe('cli helpers', () => {
     expect(argv).not.toContain('-s')
   })
 
-  it('omits -m for FileProvider/CloudFilter even with a leftover mountPath', () => {
-    const argv = buildMountArgv({ ...profile, backend: 'fileprovider', mountPath: '/some/leftover/path' })
-    expect(argv).not.toContain('-m')
-  })
-
   it('adds --temporary-fork when enabled', () => {
     expect(buildMountArgv({ ...profile, temporaryFork: true })).toContain('--temporary-fork')
     expect(buildMountArgv({ ...profile, temporaryFork: false })).not.toContain('--temporary-fork')
@@ -91,13 +85,6 @@ describe('cli helpers', () => {
 
   it('rejects --destination as a managed flag, matching --mount', () => {
     expect(validateExtraArgs(['--destination', '/tmp/other'])).toEqual(['--destination', '/tmp/other'])
-  })
-
-  it('reports FileProvider and CloudFilter as not needing a mount path', () => {
-    expect(backendNeedsMountPath('fileprovider')).toBe(false)
-    expect(backendNeedsMountPath('cloudfilter')).toBe(false)
-    expect(backendNeedsMountPath('nfs')).toBe(true)
-    expect(backendNeedsMountPath('fskit')).toBe(true)
   })
 
   it('validates FSKit mount path prefix', () => {
@@ -131,9 +118,6 @@ describe('cli helpers', () => {
     expect(validateMountPathForBackend('nfs', 'relative/path')).not.toBeNull()
     expect(validateMountPathForBackend('nfs', 'not-a-path')).not.toBeNull()
     expect(validateMountPathForBackend('nfs', 'C:\\Mounts\\Team')).toBeNull()
-    // FileProvider/CloudFilter never need a real path, so garbage passes.
-    expect(validateMountPathForBackend('fileprovider', 'not-a-path')).toBeNull()
-    expect(validateMountPathForBackend('cloudfilter', 'not-a-path')).toBeNull()
   })
 
   it('validates short flag clusters', () => {

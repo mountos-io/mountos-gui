@@ -42,7 +42,7 @@ impl Serialize for DesktopError {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum Backend {
     Auto,
@@ -50,9 +50,29 @@ enum Backend {
     Fskit,
     Nfs,
     Smb,
-    Fileprovider,
     Mountosio,
-    Cloudfilter,
+}
+
+// Hand-written so an unrecognised id degrades to Auto instead of failing the
+// parse. read_profiles aborts the entire listing on a single unreadable
+// profile file, so a profile written by an older build (naming a backend that
+// no longer exists) would otherwise take every other profile down with it.
+// Auto is the safe landing spot: the CLI probes and picks a real backend for
+// that machine, and validate_backend_for_platform still gates the result.
+impl<'de> Deserialize<'de> for Backend {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Ok(match String::deserialize(deserializer)?.as_str() {
+            "macfuse" => Backend::Macfuse,
+            "fskit" => Backend::Fskit,
+            "nfs" => Backend::Nfs,
+            "smb" => Backend::Smb,
+            "mountosio" => Backend::Mountosio,
+            _ => Backend::Auto,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,7 +123,7 @@ struct MountInstance {
     mount_path: String,
     fs_name: Option<String>,
     // The transport the mount actually runs on (macfuse/fskit/nfs/smb/
-    // fileprovider/mountosio/cloudfilter), as reported by `mountos list`.
+    // mountosio), as reported by `mountos list`.
     // fs_name is the device string ("mountos:<volume>") and says nothing about
     // the backend, so it is not a stand-in for this.
     backend: Option<String>,
@@ -505,8 +525,6 @@ fn managed_flags() -> HashSet<&'static str> {
         "nfs",
         "N",
         "smb",
-        "fileprovider",
-        "F",
         "temporary-fork",
     ]
     .into_iter()
@@ -608,16 +626,6 @@ fn reject_managed_extra_args(profile: &MountProfile) -> Result<(), DesktopError>
     }
 }
 
-// backend_needs_mount_path reports whether `backend` uses a real,
-// user-chosen filesystem path at all. FileProvider and CloudFilter mounts
-// are entirely OS-managed (FileProvider via NSFileProviderManager, keyed by
-// --name / the volume's Finder display name; CloudFilter's own CLI-side
-// mount-point requirement is waived identically, cmd/mfuse/cmd_mount.go)
-// — mountos never reads -m for either, so passing one is meaningless.
-fn backend_needs_mount_path(backend: &Backend) -> bool {
-    !matches!(backend, Backend::Fileprovider | Backend::Cloudfilter)
-}
-
 fn build_mount_argv(profile: &MountProfile) -> Vec<String> {
     let mut argv = vec!["mount".to_string()];
     if !profile.discovery_url.is_empty() {
@@ -629,7 +637,7 @@ fn build_mount_argv(profile: &MountProfile) -> Vec<String> {
     if !profile.fork.is_empty() {
         argv.extend(["--fork-name".to_string(), profile.fork.clone()]);
     }
-    if backend_needs_mount_path(&profile.backend) && !profile.mount_path.is_empty() {
+    if !profile.mount_path.is_empty() {
         argv.extend(["-m".to_string(), profile.mount_path.clone()]);
     }
     if !profile.access_key_id.is_empty() {
@@ -672,30 +680,7 @@ fn push_backend_flag(argv: &mut Vec<String>, backend: &Backend) {
         Backend::Fskit => argv.push("--fskit".to_string()),
         Backend::Nfs => argv.push("--nfs".to_string()),
         Backend::Smb => argv.push("--smb".to_string()),
-        Backend::Fileprovider => argv.push("--fileprovider".to_string()),
         Backend::Mountosio => argv.extend(["--backend".to_string(), "mountosio".to_string()]),
-        Backend::Cloudfilter => argv.extend(["--backend".to_string(), "cloudfilter".to_string()]),
-    }
-}
-
-// snapshot/deleted/version never exempt FileProvider/CloudFilter from a real
-// `-m`/`--destination` path the way cmd_mount.go does for regular mounts
-// (verified: runDeletedCommand/runVersionCommand have no such exemption), so
-// omitting the backend flag relies entirely on the CLI's own no-explicit-flag
-// default order being safe. That default order is genuinely safe on macOS
-// (cli_darwin.go probes macFUSE/FSKit availability with NFS loopback as an
-// always-available last resort) but NOT on Windows: cli_windows.go hard-codes
-// the no-flag default to "mountosio" with no capability probing, so a
-// CloudFilter-backend profile (chosen specifically because MountOsIo was
-// already found unusable on that machine) would have its view-mount silently
-// attempt mountosio and fail. FileProvider keeps the omission (macOS-only,
-// covered by the safe fallback chain); CloudFilter must emit its flag
-// explicitly.
-fn push_view_backend_flag(argv: &mut Vec<String>, backend: &Backend) {
-    match backend {
-        Backend::Cloudfilter => push_backend_flag(argv, backend),
-        _ if backend_needs_mount_path(backend) => push_backend_flag(argv, backend),
-        _ => {}
     }
 }
 
@@ -776,7 +761,7 @@ fn build_snapshot_argv(profile: &MountProfile, destination: &str, timestamp: &st
     argv.push(format!("--timestamp={}", timestamp.trim()));
     push_satellite_credentials(&mut argv, profile);
     push_cache_and_extra_args(&mut argv, profile);
-    push_view_backend_flag(&mut argv, &profile.backend);
+    push_backend_flag(&mut argv, &profile.backend);
     argv
 }
 
@@ -801,7 +786,7 @@ fn build_deleted_argv(
     }
     push_satellite_credentials(&mut argv, profile);
     push_cache_and_extra_args(&mut argv, profile);
-    push_view_backend_flag(&mut argv, &profile.backend);
+    push_backend_flag(&mut argv, &profile.backend);
     argv
 }
 
@@ -826,7 +811,7 @@ fn build_version_argv(
     }
     push_satellite_credentials(&mut argv, profile);
     push_cache_and_extra_args(&mut argv, profile);
-    push_view_backend_flag(&mut argv, &profile.backend);
+    push_backend_flag(&mut argv, &profile.backend);
     argv
 }
 
@@ -957,17 +942,9 @@ fn validate_backend_for_platform(backend: &Backend) -> Result<(), DesktopError> 
     let valid = match std::env::consts::OS {
         "macos" => matches!(
             backend,
-            Backend::Auto
-                | Backend::Macfuse
-                | Backend::Fskit
-                | Backend::Nfs
-                | Backend::Smb
-                | Backend::Fileprovider
+            Backend::Auto | Backend::Macfuse | Backend::Fskit | Backend::Nfs | Backend::Smb
         ),
-        "windows" => matches!(
-            backend,
-            Backend::Auto | Backend::Mountosio | Backend::Cloudfilter
-        ),
+        "windows" => matches!(backend, Backend::Auto | Backend::Mountosio),
         _ => matches!(backend, Backend::Auto | Backend::Nfs),
     };
     if valid {
@@ -990,12 +967,12 @@ fn validate_mount_path_for_backend(
     backend: &Backend,
     mount_path: &str,
 ) -> Result<(), DesktopError> {
-    // Empty stays legal for backends that need a path: build_mount_argv omits
-    // -m entirely in that case and the mountos CLI picks its own default.
-    // What's rejected here is a NON-empty value that isn't a real absolute
-    // path for this OS (Unix "/..." or a Windows drive-letter path) — e.g.
-    // a relative path or garbage typed into the field.
-    if backend_needs_mount_path(backend) && !mount_path.is_empty() && !is_openable_target(mount_path) {
+    // Empty stays legal here: build_mount_argv omits -m entirely in that case
+    // and the mountos CLI picks its own default. What's rejected is a NON-empty
+    // value that isn't a real absolute path for this OS (Unix "/..." or a
+    // Windows drive-letter path), e.g. a relative path or garbage typed into
+    // the field.
+    if !mount_path.is_empty() && !is_openable_target(mount_path) {
         return Err(DesktopError::Message(format!(
             "mount path must be an absolute filesystem path, got {mount_path:?}"
         )));
@@ -1046,15 +1023,12 @@ fn resolve_auto_backend(profile: &mut MountProfile) -> Result<(), DesktopError> 
                         .unwrap_or(false))
         })
     };
-    profile.backend = if usable("MountOsIo") {
-        Backend::Mountosio
-    } else if usable("CloudFilter") {
-        Backend::Cloudfilter
-    } else {
+    if !usable("MountOsIo") {
         return Err(DesktopError::Message(
             "no usable Windows mount backend was reported by mountos check".to_string(),
         ));
-    };
+    }
+    profile.backend = Backend::Mountosio;
     Ok(())
 }
 
@@ -1482,11 +1456,9 @@ fn parse_instances_value(value: &Value) -> Vec<MountInstance> {
                 .and_then(Value::as_str)
                 .map(ToString::to_string);
             let orphaned = entry.get("orphaned").and_then(Value::as_bool);
-            let limited = domain_id.is_some()
-                || fs_name.as_deref().is_some_and(|name| {
-                    let name = name.to_ascii_lowercase();
-                    name.starts_with("fileprovider") || name.contains("cloudfilter")
-                });
+            // A domainId means the mount is keyed by an OS-managed identifier
+            // rather than a path this app can stat, so no live stats come back.
+            let limited = domain_id.is_some();
             MountInstance {
                 key: domain_id.clone().unwrap_or_else(|| mount_path.clone()),
                 name: entry
@@ -1733,14 +1705,6 @@ fn require_stable_identity(app: &AppHandle, profile: &MountProfile) -> Result<()
 // require_stable_identity). Best-effort and silent on any failure -- a
 // volume-kind badge is not worth failing an otherwise-successful mount over,
 // and the next successful mount tries again since volume_kind stays None.
-//
-// Known gap: FileProvider and CloudFilter profiles have no real filesystem
-// mount_path (backend_needs_mount_path is false for both, entirely OS-managed
-// instead), so this read can never succeed for them -- volume_kind, its
-// badge, and the identity lock never engage for those two backends. Not
-// worth a separate detection path (would need a control-socket round trip
-// instead of a direct file read) for what stays a UX/data-integrity nicety,
-// not a security boundary either way.
 fn detect_and_persist_volume_kind(app: &AppHandle, profile: &MountProfile) {
     if profile.volume_kind.is_some() {
         return;
@@ -1945,11 +1909,10 @@ fn mount_profile_blocking(
     resolve_auto_backend(&mut profile)?;
     validate_mount_path_for_backend(&profile.backend, &profile.mount_path)?;
     reject_managed_extra_args(&profile)?;
-    let needs_mount_path = backend_needs_mount_path(&profile.backend);
-    if needs_mount_path && profile.mount_path.is_empty() {
+    if profile.mount_path.is_empty() {
         return Err(DesktopError::Message("mount path is required".to_string()));
     }
-    if needs_mount_path && list_contains_target(&profile.mount_path)? {
+    if list_contains_target(&profile.mount_path)? {
         return Err(DesktopError::Message(format!(
             "target is already mounted: {}",
             profile.mount_path
@@ -2355,10 +2318,8 @@ async fn fork_restore(
 }
 
 // Shared guard for the three satellite view-mount commands: the destination
-// must be a real absolute path (never OS-managed like FileProvider/
-// CloudFilter targets, since deleted/version/snapshot have no such exemption
-// server-side — verified against cmd_deleted.go/cmd_version.go/
-// cmd_snapshot.go) and must differ from the parent profile's own mount path.
+// must be a real absolute path and must differ from the parent profile's own
+// mount path.
 fn validate_view_destination(profile: &MountProfile, destination: &str) -> Result<(), DesktopError> {
     if destination.trim().is_empty() || !is_openable_target(destination) {
         return Err(DesktopError::Message(
@@ -2366,9 +2327,9 @@ fn validate_view_destination(profile: &MountProfile, destination: &str) -> Resul
         ));
     }
     // Reuses the same FSKit /Volumes/MountOS/<name> prefix check the primary
-    // mount path already enforces: push_view_backend_flag emits --fskit for
-    // these view-mounts too, so an FSKit destination is bound by the same
-    // real constraint, not just a plain absolute path.
+    // mount path already enforces: push_backend_flag emits --fskit for these
+    // view-mounts too, so an FSKit destination is bound by the same real
+    // constraint, not just a plain absolute path.
     validate_mount_path_for_backend(&profile.backend, destination)?;
     if !profile.mount_path.is_empty() && targets_equal(destination, &profile.mount_path) {
         return Err(DesktopError::Message(
@@ -2990,10 +2951,10 @@ fn list_active_targets() -> Result<Vec<String>, DesktopError> {
         .collect())
 }
 
-// Returns (target, mountPath) per active mount. The two differ for CloudFilter
-// sync roots, where target is the domainId; `unmount --json` keys its outcomes
-// by mountPath, so mapping one to the other is what keeps a per-mount verdict
-// comparable to the target list the rest of this file works in.
+// Returns (target, mountPath) per active mount. The two differ whenever the
+// CLI reports a domainId, where that identifier is the target; `unmount --json`
+// keys its outcomes by mountPath, so mapping one to the other is what keeps a
+// per-mount verdict comparable to the target list the rest of this file works in.
 fn list_active_entries() -> Result<Vec<(String, String)>, DesktopError> {
     let output = command_output(&["list", "--json"])?;
     if !output.status.success() {
@@ -3943,18 +3904,38 @@ mod tests {
         assert!(!argv.iter().any(|arg| arg.len() == 40));
     }
 
+    // Every surviving backend mounts at a real path, so -m is emitted whenever
+    // one is set and omitted only when the field is blank.
     #[test]
-    fn omits_mount_flag_for_os_managed_backends() {
+    fn emits_mount_flag_whenever_a_mount_path_is_set() {
         let mut p = profile();
-        p.mount_path = "/some/leftover/path".to_string();
-        p.backend = Backend::Fileprovider;
-        assert!(!build_mount_argv(&p).contains(&"-m".to_string()));
+        p.mount_path = "/some/path".to_string();
+        for backend in [
+            Backend::Auto,
+            Backend::Macfuse,
+            Backend::Fskit,
+            Backend::Nfs,
+            Backend::Smb,
+            Backend::Mountosio,
+        ] {
+            p.backend = backend;
+            assert!(build_mount_argv(&p).contains(&"-m".to_string()));
+        }
 
-        p.backend = Backend::Cloudfilter;
+        p.mount_path = String::new();
         assert!(!build_mount_argv(&p).contains(&"-m".to_string()));
+    }
 
-        p.backend = Backend::Nfs;
-        assert!(build_mount_argv(&p).contains(&"-m".to_string()));
+    // A profile written by an older build can still name a backend that no
+    // longer exists; it must land on Auto rather than fail the whole listing.
+    #[test]
+    fn deserializes_unknown_backend_ids_as_auto() {
+        for raw in ["\"fileprovider\"", "\"cloudfilter\"", "\"\"", "\"nonsense\""] {
+            let backend: Backend = serde_json::from_str(raw).expect("unknown id must not fail");
+            assert!(matches!(backend, Backend::Auto), "{raw} should map to Auto");
+        }
+        let known: Backend = serde_json::from_str("\"mountosio\"").expect("known id parses");
+        assert!(matches!(known, Backend::Mountosio));
     }
 
     #[test]
@@ -3993,10 +3974,6 @@ mod tests {
         } else {
             assert!(validate_mount_path_for_backend(&Backend::Nfs, "/Volumes/Team").is_ok());
         }
-        // Backends with no real filesystem path (FileProvider/CloudFilter)
-        // are never gated by this check either.
-        assert!(validate_mount_path_for_backend(&Backend::Fileprovider, "not-a-path").is_ok());
-        assert!(validate_mount_path_for_backend(&Backend::Cloudfilter, "not-a-path").is_ok());
     }
 
     #[test]
@@ -4130,7 +4107,7 @@ mod tests {
     #[test]
     fn rejects_non_path_open_targets() {
         assert!(is_openable_target("/Volumes/MountOS/Team"));
-        assert!(!is_openable_target("fileprovider-domain-id"));
+        assert!(!is_openable_target("an-os-managed-domain-id"));
     }
 
     #[test]
@@ -4207,19 +4184,15 @@ mod tests {
         assert!(padded.contains(&"--version-format=date".to_string()));
     }
 
+    // Windows has no safe no-flag default (cli_windows.go hard-codes mountosio
+    // with no capability probing), so a view-mount states its backend rather
+    // than relying on the CLI's default order.
     #[test]
-    fn omits_backend_flag_for_view_mounts_on_os_managed_backends() {
+    fn emits_backend_flag_for_view_mounts() {
         let mut p = profile();
-        p.backend = Backend::Fileprovider;
+        p.backend = Backend::Mountosio;
         let argv = build_deleted_argv(&p, "/tmp/deleted-view", None, None);
-        assert!(!argv.contains(&"--fileprovider".to_string()));
-
-        // CloudFilter is the opposite of FileProvider here: Windows has no
-        // safe no-flag default (hard-codes to mountosio, no capability
-        // probing), so the flag must be emitted explicitly.
-        p.backend = Backend::Cloudfilter;
-        let argv = build_deleted_argv(&p, "/tmp/deleted-view", None, None);
-        assert!(argv.windows(2).any(|pair| pair == ["--backend", "cloudfilter"]));
+        assert!(argv.windows(2).any(|pair| pair == ["--backend", "mountosio"]));
 
         p.backend = Backend::Nfs;
         let argv = build_deleted_argv(&p, "/tmp/deleted-view", None, None);

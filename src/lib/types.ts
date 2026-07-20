@@ -1,4 +1,4 @@
-export type Backend = 'auto' | 'macfuse' | 'fskit' | 'nfs' | 'smb' | 'fileprovider' | 'mountosio' | 'cloudfilter'
+export type Backend = 'auto' | 'macfuse' | 'fskit' | 'nfs' | 'smb' | 'mountosio'
 export type SecretRef = 'vault' | 'prompt'
 export type ProfileKind = 'mount' | 'gateway'
 export type HealthState = 'healthy' | 'launching' | 'flushing' | 'limited' | 'lost' | 'stalled' | 'reconnecting' | 'idle'

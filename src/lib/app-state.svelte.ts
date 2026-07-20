@@ -1,7 +1,6 @@
 import { tick } from 'svelte'
 import { showErrorToast, showInfoToast, showWarningToast } from './toast.svelte'
 import {
-  backendNeedsMountPath,
   buildDeletedArgv,
   buildForkCreateArgv,
   buildForkDeleteArgv,
@@ -328,15 +327,14 @@ const filteredProfiles = $derived.by(() => {
 
 const backends = $derived<Backend[]>(
   state.systemState.platform === 'windows'
-    ? ['auto', 'mountosio', 'cloudfilter']
+    ? ['auto', 'mountosio']
     : state.systemState.platform === 'macos'
-      ? ['auto', 'macfuse', 'fskit', 'nfs', 'smb', 'fileprovider']
+      ? ['auto', 'macfuse', 'fskit', 'nfs', 'smb']
       : ['auto', 'nfs'],
 )
 
-const mountPathIsManaged = $derived(selectedProfile ? !backendNeedsMountPath(selectedProfile.backend) : false)
 const mountPathError = $derived.by(() => {
-  if (!selectedProfile || mountPathIsManaged) return ''
+  if (!selectedProfile) return ''
   if (!selectedProfile.mountPath.trim()) return 'Mount path is required for this backend'
   return validateMountPathForBackend(selectedProfile.backend, selectedProfile.mountPath) ?? ''
 })
@@ -377,7 +375,6 @@ export const computed = {
   get filteredProfiles() { return filteredProfiles },
   get limitedCount() { return limitedCount },
   get backends() { return backends },
-  get mountPathIsManaged() { return mountPathIsManaged },
   get mountPathError() { return mountPathError },
   get trimmedSecret() { return trimmedSecret },
   get secretLengthError() { return secretLengthError },

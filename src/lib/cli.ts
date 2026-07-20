@@ -35,8 +35,6 @@ const managedFlags = new Set([
   'nfs',
   'N',
   'smb',
-  'fileprovider',
-  'F',
   'temporary-fork',
 ])
 
@@ -66,16 +64,15 @@ const backendArgv: Partial<Record<Backend, string[]>> = {
   fskit: ['--fskit'],
   nfs: ['--nfs'],
   smb: ['--smb'],
-  fileprovider: ['--fileprovider'],
   mountosio: ['--backend', 'mountosio'],
-  cloudfilter: ['--backend', 'cloudfilter'],
 }
 
-// UI-only mirror of src-tauri/src/lib.rs's backend_needs_mount_path /
-// validate_mount_path_for_backend — same hand-synced-duplicate caveat as
-// the flag allowlists above; the Rust side independently re-validates.
-export function backendNeedsMountPath(backend: Backend): boolean {
-  return backend !== 'fileprovider' && backend !== 'cloudfilter'
+// Every backend takes a real mount point, so regular mounts and view-mounts
+// alike state their backend rather than relying on the CLI's no-flag default
+// order. Mirrors src-tauri/src/lib.rs's push_backend_flag.
+function pushBackendFlag(argv: string[], backend: Backend): void {
+  const flags = backendArgv[backend]
+  if (flags) argv.push(...flags)
 }
 
 // Accepts a Unix absolute path or a Windows drive-letter path (bare "C:",
@@ -97,8 +94,10 @@ export function isValidFolderName(name: string): boolean {
   return !/[/\\\x00-\x1f]/.test(name)
 }
 
+// UI-only mirror of src-tauri/src/lib.rs's validate_mount_path_for_backend —
+// same hand-synced-duplicate caveat as the flag allowlists above; the Rust
+// side independently re-validates.
 export function validateMountPathForBackend(backend: Backend, mountPath: string): string | null {
-  if (!backendNeedsMountPath(backend)) return null
   // Empty stays legal: buildMountArgv omits -m and the mountos CLI picks its
   // own default. A non-empty value has to actually be an absolute path.
   if (mountPath && !isAbsolutePath(mountPath)) {
@@ -164,15 +163,12 @@ export function buildMountArgv(profile: MountProfile): string[] {
   if (profile.discoveryUrl) argv.push('--discovery-url', profile.discoveryUrl)
   if (profile.volume) argv.push('--volname', profile.volume)
   if (profile.fork) argv.push('--fork-name', profile.fork)
-  if (backendNeedsMountPath(profile.backend) && profile.mountPath) argv.push('-m', profile.mountPath)
+  if (profile.mountPath) argv.push('-m', profile.mountPath)
   if (profile.accessKeyId) argv.push('-a', profile.accessKeyId, '-s')
   if (profile.readOnly) argv.push('--read-only')
   if (profile.temporaryFork) argv.push('--temporary-fork')
   if (profile.cacheDir) argv.push('--disk-cache-dir', profile.cacheDir)
-
-  const backend = backendArgv[profile.backend]
-  if (backend) argv.push(...backend)
-
+  pushBackendFlag(argv, profile.backend)
   argv.push(...profile.extraArgs)
   return argv
 }
@@ -184,16 +180,6 @@ export function buildMountArgv(profile: MountProfile): string[] {
 // re-validates everything from the on-disk profile before acting.
 function satelliteVolname(profile: MountProfile, kind: string): string {
   return profile.volume ? `${profile.volume} (${kind})` : `mountOS ${kind}`
-}
-
-// CloudFilter must always emit its flag explicitly (Windows has no safe
-// no-flag default -- it hard-codes to mountosio with no capability probing),
-// unlike FileProvider on macOS, which is safe to omit thanks to a real
-// probed fallback chain. Mirrors src-tauri/src/lib.rs's push_view_backend_flag.
-function pushViewBackendFlag(argv: string[], backend: Backend): void {
-  if (backend !== 'cloudfilter' && !backendNeedsMountPath(backend)) return
-  const flags = backendArgv[backend]
-  if (flags) argv.push(...flags)
 }
 
 function buildSatellitePrefix(subcommand: string, profile: MountProfile, kind: string): string[] {
@@ -228,7 +214,7 @@ export function buildSnapshotArgv(profile: MountProfile, destination: string, ti
   argv.push(`--timestamp=${timestamp.trim()}`)
   pushSatelliteCredentials(argv, profile)
   pushCacheAndExtraArgs(argv, profile)
-  pushViewBackendFlag(argv, profile.backend)
+  pushBackendFlag(argv, profile.backend)
   return argv
 }
 

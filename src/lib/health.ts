@@ -43,9 +43,7 @@ const BACKEND_PASTEL: Partial<Record<Backend, string>> = {
   fskit: 'volume',
   nfs: 'storage',
   smb: 'session',
-  fileprovider: 'node',
   mountosio: 'region',
-  cloudfilter: 'cloudfilter',
 }
 
 /** Inline style for a per-backend color-coded Badge; empty for 'auto'/unknown. */
@@ -58,7 +56,7 @@ export function backendBadgeStyle(backend?: string): string {
 // Fixed, not derived from the label: the same kind must always read as the
 // same color everywhere it appears (Running Instances row, profile form),
 // rather than picking one of the 7 tones arbitrarily per render.
-const VOLUME_KIND_PASTEL = { general: 'mount', iceberg: 'cloudfilter' } as const
+const VOLUME_KIND_PASTEL = { general: 'mount', iceberg: 'lake' } as const
 
 /** Inline style for a color-coded volume-kind Badge (General/Iceberg). */
 export function volumeKindBadgeStyle(kind?: string): string {

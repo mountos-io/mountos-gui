@@ -53,15 +53,6 @@
     return instance.volumeKind ?? profileForInstance(instance)?.volumeKind
   }
 
-  // FileProvider (macOS) and CloudFilter (Windows) mounts aren't backed by
-  // mfuse's FUSE process, so they never write a .mountOS/.config reserved
-  // file -- there's nothing for "Show Configuration" to read. Opening the
-  // folder in Finder/Explorer still works for them, so this is deliberately
-  // narrower than canOpen, not a replacement for it.
-  function supportsConfigView(instance: MountInstance): boolean {
-    return canOpen(instance) && instance.backend !== 'fileprovider' && instance.backend !== 'cloudfilter'
-  }
-
   // "Open folder" moved to a direct action button, so it's no longer the one
   // unconditional item keeping this menu non-empty -- without this check the
   // dropdown trigger would open onto nothing for an instance with no other
@@ -123,7 +114,7 @@
         {#each computed.filteredInstances as instance (instance.key)}
           <Table.Row>
             <Table.Cell class="text-muted-foreground">
-              {#if supportsConfigView(instance)}
+              {#if canOpen(instance)}
                 <button
                   type="button"
                   class="inline-flex items-center justify-center p-2 -m-1 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
@@ -138,8 +129,8 @@
               {/if}
             </Table.Cell>
             <Table.Cell
-              class={supportsConfigView(instance) ? 'cursor-pointer' : ''}
-              onclick={() => supportsConfigView(instance) && toggleInstanceConfig(instance)}
+              class={canOpen(instance) ? 'cursor-pointer' : ''}
+              onclick={() => canOpen(instance) && toggleInstanceConfig(instance)}
             >
               <span class="flex flex-wrap items-center gap-2">
                 <!-- title for pointer users; the sr-only text is what makes

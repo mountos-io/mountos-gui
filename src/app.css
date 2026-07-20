@@ -47,8 +47,8 @@
   --pastel-node-text: oklch(0.50 0.15 125);
   --pastel-region: oklch(0.72 0.15 310);
   --pastel-region-text: oklch(0.50 0.15 310);
-  --pastel-cloudfilter: oklch(0.72 0.15 250);
-  --pastel-cloudfilter-text: oklch(0.50 0.15 250);
+  --pastel-lake: oklch(0.72 0.15 250);
+  --pastel-lake-text: oklch(0.50 0.15 250);
 }
 
 .dark {
@@ -92,8 +92,8 @@
   --pastel-node-text: oklch(0.70 0.16 125);
   --pastel-region: oklch(0.70 0.16 310);
   --pastel-region-text: oklch(0.70 0.16 310);
-  --pastel-cloudfilter: oklch(0.70 0.16 250);
-  --pastel-cloudfilter-text: oklch(0.70 0.16 250);
+  --pastel-lake: oklch(0.70 0.16 250);
+  --pastel-lake-text: oklch(0.70 0.16 250);
 }
 
 /* Maps Tailwind's utility classes (bg-card, border-border, text-muted-foreground,

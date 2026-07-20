@@ -227,28 +227,19 @@
         </div>
         <div class="grid gap-1.5">
           <Label for="mount-path">Mount path</Label>
-          {#if computed.mountPathIsManaged}
-            <Input id="mount-path" value={selectedProfile.mountPath} disabled placeholder="Managed automatically by the OS" />
-            <small class="text-muted-foreground text-sm">
-              {selectedProfile.backend === 'fileprovider'
-                ? 'FileProvider mounts have no filesystem path; the volume appears in Finder under its volume name.'
-                : 'CloudFilter mounts have no filesystem path; the volume appears under its own drive/namespace.'}
-            </small>
-          {:else}
-            <div class="flex gap-2">
-              <Input
-                id="mount-path"
-                value={selectedProfile.mountPath}
-                placeholder={selectedProfile.backend === 'fskit' ? '/Volumes/MountOS/<name>' : undefined}
-                oninput={(e) => patchProfile({ mountPath: e.currentTarget.value })}
-                class="flex-1"
-              />
-              <Button type="button" onclick={browseMountPath} disabled={appState.busy} title="Choose a folder" class="shrink-0">
-                <FolderOpen size={16} aria-hidden="true" />
-                Browse
-              </Button>
-            </div>
-          {/if}
+          <div class="flex gap-2">
+            <Input
+              id="mount-path"
+              value={selectedProfile.mountPath}
+              placeholder={selectedProfile.backend === 'fskit' ? '/Volumes/MountOS/<name>' : undefined}
+              oninput={(e) => patchProfile({ mountPath: e.currentTarget.value })}
+              class="flex-1"
+            />
+            <Button type="button" onclick={browseMountPath} disabled={appState.busy} title="Choose a folder" class="shrink-0">
+              <FolderOpen size={16} aria-hidden="true" />
+              Browse
+            </Button>
+          </div>
         </div>
         <div class="grid gap-1.5">
           <Label id="profile-secret-ref-label">Secret</Label>
