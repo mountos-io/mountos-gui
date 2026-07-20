@@ -17,6 +17,7 @@
   import {
     appState,
     changeAllowForkForceDelete,
+    changeAllowUnmountForce,
     changeCliPathOverride,
     changeDefaultBackend,
     changeDefaultDiscoveryUrl,
@@ -192,6 +193,13 @@
     </div>
     {#if appState.settings.allowForkForceDelete}
       <Callout>--force fork delete acts on the shared volume, not just this profile, and also removes the fork's entire subtree. Deleting a fork is recoverable only within its grace period.</Callout>
+    {/if}
+    <div class="flex items-center justify-between gap-4">
+      <span class="inline-flex items-center gap-1"><strong>Allow force unmount</strong><InfoTip text="Adds a Force option to the unmount prompt, for unmounting a mount an app or terminal is still using." /></span>
+      <Checkbox checked={appState.settings.allowUnmountForce} onchange={(e) => changeAllowUnmountForce(e.currentTarget.checked)} />
+    </div>
+    {#if appState.settings.allowUnmountForce}
+      <Callout>Forcing disconnects whatever is still using the mount. Apps reading or writing files there will get an error and lose unsaved work. Without it, a mount that is in use stays mounted and keeps working.</Callout>
     {/if}
   </div>
 </section>

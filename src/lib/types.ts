@@ -138,6 +138,9 @@ export interface DesktopSettings {
   // just this profile's. Required (not optional): Rust always emits this
   // key via a plain bool + #[serde(default)], it just defaults to false.
   allowForkForceDelete: boolean
+  // Offers Force on the unmount prompt. Required (not optional) for the same
+  // reason as allowForkForceDelete.
+  allowUnmountForce: boolean
 }
 
 export interface ExportedProfile {
@@ -204,6 +207,9 @@ export interface GatewayLaunchResult {
 export interface UnmountAllResult {
   attempted: number
   failed: string[]
+  // Subset of failed that the CLI reported as busy. Those are still mounted
+  // and serving, and are the ones a forced retry can get past.
+  busy: string[]
 }
 
 export interface LicensedPackage {

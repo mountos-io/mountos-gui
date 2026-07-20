@@ -98,7 +98,7 @@ export async function exportProfile(profileId: string): Promise<ExportedProfile>
 }
 
 export async function getSettings(): Promise<DesktopSettings> {
-  if (!hasDesktopBridge()) return { defaultBackend: 'auto', allowForkForceDelete: false }
+  if (!hasDesktopBridge()) return { defaultBackend: 'auto', allowForkForceDelete: false, allowUnmountForce: false }
   return invoke<DesktopSettings>('get_settings')
 }
 
@@ -209,14 +209,14 @@ export async function stopGateway(pid: number): Promise<void> {
   await invoke('stop_gateway', { pid })
 }
 
-export async function unmountTarget(target: string): Promise<UnmountResult> {
+export async function unmountTarget(target: string, force = false): Promise<UnmountResult> {
   if (!hasDesktopBridge()) throw new Error('Desktop bridge unavailable')
-  return invoke<UnmountResult>('unmount_target', { target })
+  return invoke<UnmountResult>('unmount_target', { target, force })
 }
 
-export async function unmountAllTargets(): Promise<UnmountAllResult> {
+export async function unmountAllTargets(force = false): Promise<UnmountAllResult> {
   if (!hasDesktopBridge()) throw new Error('Desktop bridge unavailable')
-  return invoke<UnmountAllResult>('unmount_all_targets')
+  return invoke<UnmountAllResult>('unmount_all_targets', { force })
 }
 
 export async function openTarget(target: string): Promise<void> {

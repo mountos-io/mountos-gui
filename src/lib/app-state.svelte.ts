@@ -128,7 +128,7 @@ const state = $state({
   rejectedArgs: [] as string[],
   extraArgsInput: '',
   extraArgsError: '',
-  settings: { defaultBackend: 'auto', allowForkForceDelete: false } as DesktopSettings,
+  settings: { defaultBackend: 'auto', allowForkForceDelete: false, allowUnmountForce: false } as DesktopSettings,
   vaultStatus: {} as Record<string, boolean>,
   diagnosticsBundle: null as DiagnosticsBundle | null,
   mcpStatusText: '',
@@ -155,6 +155,9 @@ const state = $state({
 
   // Unmount confirm
   unmountPromptFor: null as MountInstance | 'all' | null,
+  // Per-prompt opt-in to --force, only offered when settings.allowUnmountForce
+  // is on. Reset every time the prompt opens or closes.
+  unmountPromptForce: false,
 
   // Fork management: its own navigable place (ForkBrowserView), reached from
   // the profile editor via a "Forks" satellite button -- not embedded inline
@@ -1322,15 +1325,17 @@ export async function openBundle() {
   }
 }
 
-export async function runUnmount(instance: MountInstance) {
+export async function runUnmount(instance: MountInstance, force = false) {
   state.busy = true
   expectedGone.add(instance.key)
   markUnmountInFlight()
   try {
-    const result = await unmountTarget(instance.domainId || instance.mountPath)
+    const result = await unmountTarget(instance.domainId || instance.mountPath, force)
     await refresh(false)
     notify(result.state === 'idle' ? 'Unmount complete' : 'Unmount is still flushing in the background')
   } catch (error) {
+    // The mount is still there on any failure, so the row belongs back in the
+    // list rather than being hidden as on its way out.
     expectedGone.delete(instance.key)
     notify(error instanceof Error ? error.message : 'Unmount failed', 'error')
   } finally {
@@ -1338,20 +1343,21 @@ export async function runUnmount(instance: MountInstance) {
   }
 }
 
-export async function runUnmountAll() {
+export async function runUnmountAll(force = false) {
   const keys = state.systemState.instances.map((instance) => instance.key)
   if (keys.length === 0) return
   state.busy = true
   for (const key of keys) expectedGone.add(key)
   markUnmountInFlight()
   try {
-    const result = await unmountAllTargets()
+    const result = await unmountAllTargets(force)
     for (const failedTarget of result.failed) expectedGone.delete(failedTarget)
     await refresh(false)
     if (result.failed.length === 0) {
       notify(`Unmounted all ${result.attempted} mounts`)
     } else {
-      notify(`Unmounted ${result.attempted - result.failed.length} of ${result.attempted}; ${result.failed.length} failed`, 'error')
+      const busySuffix = result.busy.length > 0 ? ` (${result.busy.length} still in use and left mounted)` : ''
+      notify(`Unmounted ${result.attempted - result.failed.length} of ${result.attempted}; ${result.failed.length} failed${busySuffix}`, 'error')
     }
   } catch (error) {
     for (const key of keys) expectedGone.delete(key)
@@ -1365,6 +1371,7 @@ export function requestUnmount(instance: MountInstance) {
   if (state.skipUnmountConfirm) {
     void runUnmount(instance)
   } else {
+    state.unmountPromptForce = false
     state.unmountPromptFor = instance
   }
 }
@@ -1374,19 +1381,24 @@ export function requestUnmountAll() {
   if (state.skipUnmountConfirm) {
     void runUnmountAll()
   } else {
+    state.unmountPromptForce = false
     state.unmountPromptFor = 'all'
   }
 }
 
 export function cancelUnmountPrompt() {
   state.unmountPromptFor = null
+  state.unmountPromptForce = false
 }
 
 export async function confirmUnmountPrompt() {
   const target = state.unmountPromptFor
+  // Force never carries over to the next prompt; each unmount opts in on its own.
+  const force = state.unmountPromptForce && state.settings.allowUnmountForce
   state.unmountPromptFor = null
-  if (target === 'all') await runUnmountAll()
-  else if (target) await runUnmount(target)
+  state.unmountPromptForce = false
+  if (target === 'all') await runUnmountAll(force)
+  else if (target) await runUnmount(target, force)
 }
 
 export async function runOpen(instance: MountInstance) {
@@ -1528,6 +1540,15 @@ export async function changeAllowForkForceDelete(enabled: boolean) {
   try {
     state.settings = await saveSettings({ ...state.settings, allowForkForceDelete: enabled })
     notify(enabled ? 'Force fork delete allowed' : 'Force fork delete disallowed')
+  } catch (error) {
+    notify(error instanceof Error ? error.message : 'Failed to save settings', 'error')
+  }
+}
+
+export async function changeAllowUnmountForce(enabled: boolean) {
+  try {
+    state.settings = await saveSettings({ ...state.settings, allowUnmountForce: enabled })
+    notify(enabled ? 'Force unmount allowed' : 'Force unmount disallowed')
   } catch (error) {
     notify(error instanceof Error ? error.message : 'Failed to save settings', 'error')
   }

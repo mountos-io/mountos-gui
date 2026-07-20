@@ -2,6 +2,8 @@
   import { Unplug } from '@lucide/svelte'
   import * as Dialog from '$lib/components/ui/dialog'
   import { Button } from '$lib/components/ui/button'
+  import { Checkbox } from '$lib/components/ui/checkbox'
+  import Callout from '$lib/components/Callout.svelte'
   import { appState, cancelUnmountPrompt, confirmUnmountPrompt } from '$lib/app-state.svelte'
 </script>
 
@@ -19,6 +21,14 @@
           <p class="py-4">Unmount all {appState.systemState.instances.length} running mounts?</p>
         {:else}
           <p class="py-4">Unmount "{appState.unmountPromptFor.name || appState.unmountPromptFor.mountPath}"?</p>
+        {/if}
+        {#if appState.settings.allowUnmountForce}
+          <div class="grid gap-4 pb-4">
+            <Checkbox bind:checked={appState.unmountPromptForce} label="Unmount anyway (--force)" />
+            {#if appState.unmountPromptForce}
+              <Callout>Disconnects whatever is still using this mount. Apps reading or writing files there will get an error and lose unsaved work.</Callout>
+            {/if}
+          </div>
         {/if}
         <Dialog.Footer>
           <Button type="button" variant="outline" onclick={cancelUnmountPrompt}>Cancel</Button>

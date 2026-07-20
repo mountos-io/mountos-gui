@@ -249,6 +249,12 @@ struct DesktopSettings {
     // temporary_fork precedent on MountProfile.
     #[serde(default)]
     allow_fork_force_delete: bool,
+    // Offers --force on unmount, which disconnects whatever still holds a busy
+    // mount. Off by default, because apps reading or writing files there get an
+    // I/O error and lose unsaved work. Without it a busy mount is reported as
+    // busy and stays mounted and working.
+    #[serde(default)]
+    allow_unmount_force: bool,
 }
 
 impl Default for DesktopSettings {
@@ -260,6 +266,7 @@ impl Default for DesktopSettings {
             poll_seconds: None,
             terminal: None,
             allow_fork_force_delete: false,
+            allow_unmount_force: false,
         }
     }
 }
@@ -280,6 +287,51 @@ struct UnmountResult {
 struct UnmountAllResult {
     attempted: usize,
     failed: Vec<String>,
+    // Targets the CLI reported as busy rather than failed. These are still
+    // mounted and serving, and are the ones a forced retry can get past.
+    busy: Vec<String>,
+}
+
+// One entry of `mountos unmount --json`. state is one of unmounted, busy,
+// refused, cancelled, failed.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UnmountOutcome {
+    mount_path: String,
+    state: String,
+    #[serde(default)]
+    error: String,
+    #[serde(default)]
+    busy: bool,
+}
+
+impl UnmountOutcome {
+    fn unmounted(&self) -> bool {
+        self.state == "unmounted"
+    }
+
+    // Prefers the CLI's own message, which already explains a busy mount and
+    // what to do about it, over a generic restatement of the state.
+    fn detail(&self) -> String {
+        if self.error.is_empty() {
+            format!("unmount reported {}", self.state)
+        } else {
+            self.error.clone()
+        }
+    }
+}
+
+// Parses `mountos unmount --json`. The document goes to stdout and any error
+// text to stderr, so a non-zero exit still carries a usable document.
+fn parse_unmount_outcomes(stdout: &[u8], stderr: &[u8]) -> Result<Vec<UnmountOutcome>, DesktopError> {
+    serde_json::from_slice::<Vec<UnmountOutcome>>(stdout).map_err(|error| {
+        let detail = String::from_utf8_lossy(stderr).trim().to_string();
+        DesktopError::Message(if detail.is_empty() {
+            format!("could not read unmount result: {error}")
+        } else {
+            detail
+        })
+    })
 }
 
 const KEYRING_SERVICE: &str = "sh.mountos.desktop";
@@ -2853,11 +2905,31 @@ async fn stop_gateway(pid: u32) -> Result<(), DesktopError> {
         .map_err(|error| DesktopError::Message(format!("stop gateway task failed: {error}")))?
 }
 
-fn unmount_target_blocking(target: String) -> Result<UnmountResult, DesktopError> {
+// Same shape and same trust model as require_force_delete_allowed, a
+// server-side re-check so every in-app path honors the setting, not a boundary
+// against a hostile renderer.
+fn require_force_unmount_allowed(app: &AppHandle) -> Result<(), DesktopError> {
+    if get_settings(app.clone())?.allow_unmount_force {
+        Ok(())
+    } else {
+        Err(DesktopError::Message(
+            "Force unmount is disabled. Enable it in Settings first.".to_string(),
+        ))
+    }
+}
+
+fn unmount_target_blocking(
+    app: AppHandle,
+    target: String,
+    force: bool,
+) -> Result<UnmountResult, DesktopError> {
     if target.trim().is_empty() {
         return Err(DesktopError::Message(
             "unmount target is required".to_string(),
         ));
+    }
+    if force {
+        require_force_unmount_allowed(&app)?;
     }
     // Mirrors open_target's guard: the UI's mount list can be up to 30s
     // stale (background polling interval), so re-verify against a fresh
@@ -2870,20 +2942,28 @@ fn unmount_target_blocking(target: String) -> Result<UnmountResult, DesktopError
             "refusing to unmount a path that is not an active mount target: {target}"
         )));
     }
-    let output = Command::new(mountos_path()?)
-        .args(["unmount", "-y", &target])
-        .output()?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    if !output.status.success() || stdout.contains("Unmount cancelled.") {
-        let detail = format!("{}\n{}", String::from_utf8_lossy(&output.stderr), stdout)
-            .trim()
-            .to_string();
-        return Err(DesktopError::Message(if detail.is_empty() {
-            format!("mountos unmount exited with {}", output.status)
-        } else {
-            detail
-        }));
+    let mut args = vec!["unmount", "-y", "--json"];
+    if force {
+        args.push("--force");
     }
+    args.push(&target);
+    let output = Command::new(mountos_path()?).args(&args).output()?;
+
+    // The CLI answers once the mount is gone from the system, and reports a
+    // busy mount as busy rather than tearing it down, so its verdict is
+    // authoritative. Anything it did not unmount is a real failure to surface.
+    let outcomes = parse_unmount_outcomes(&output.stdout, &output.stderr)?;
+    let Some(outcome) = outcomes.first() else {
+        return Err(DesktopError::Message(
+            "mountos unmount returned no result".to_string(),
+        ));
+    };
+    if !outcome.unmounted() {
+        return Err(DesktopError::Message(outcome.detail()));
+    }
+
+    // Unmounted means gone from the mount table; flushing to the server can
+    // still be running behind it.
     let removed = poll_target(&target, false, UNMOUNT_TIMEOUT);
     Ok(UnmountResult {
         state: if removed { "idle" } else { "flushing" }.to_string(),
@@ -2892,13 +2972,29 @@ fn unmount_target_blocking(target: String) -> Result<UnmountResult, DesktopError
 }
 
 #[tauri::command]
-async fn unmount_target(target: String) -> Result<UnmountResult, DesktopError> {
-    tauri::async_runtime::spawn_blocking(move || unmount_target_blocking(target))
+async fn unmount_target(
+    app: AppHandle,
+    target: String,
+    force: Option<bool>,
+) -> Result<UnmountResult, DesktopError> {
+    let force = force.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || unmount_target_blocking(app, target, force))
         .await
         .map_err(|error| DesktopError::Message(format!("unmount task failed: {error}")))?
 }
 
 fn list_active_targets() -> Result<Vec<String>, DesktopError> {
+    Ok(list_active_entries()?
+        .into_iter()
+        .map(|(target, _)| target)
+        .collect())
+}
+
+// Returns (target, mountPath) per active mount. The two differ for CloudFilter
+// sync roots, where target is the domainId; `unmount --json` keys its outcomes
+// by mountPath, so mapping one to the other is what keeps a per-mount verdict
+// comparable to the target list the rest of this file works in.
+fn list_active_entries() -> Result<Vec<(String, String)>, DesktopError> {
     let output = command_output(&["list", "--json"])?;
     if !output.status.success() {
         return Err(DesktopError::Message(format!(
@@ -2915,36 +3011,88 @@ fn list_active_targets() -> Result<Vec<String>, DesktopError> {
     Ok(entries
         .iter()
         .filter_map(|entry| {
-            entry
+            let mount_path = entry.get("mountPath").and_then(Value::as_str);
+            let target = entry
                 .get("domainId")
                 .and_then(Value::as_str)
-                .or_else(|| entry.get("mountPath").and_then(Value::as_str))
-                .map(ToString::to_string)
+                .or(mount_path)?;
+            Some((
+                target.to_string(),
+                mount_path.unwrap_or(target).to_string(),
+            ))
         })
         .collect())
 }
 
 // unmount --all is one shell-out for the whole fleet rather than N individual
-// unmount_target calls: the CLI's own combined confirmation-free (-y) batch
+// unmount_target calls. The CLI's own combined confirmation-free (-y) batch
 // unmount is both faster (no N separate process spawns) and matches the CLI's
-// own --all semantics exactly. Success/failure per target isn't parsed out of
-// CLI text (fragile); instead the active target list is diffed before/after —
-// anything still present after the call didn't unmount.
-fn unmount_all_targets_blocking() -> Result<UnmountAllResult, DesktopError> {
-    let before = list_active_targets()?;
-    if before.is_empty() {
+// own --all semantics exactly. Per-target success comes from the CLI's --json
+// outcomes, which are authoritative. The before/after list diff only waits for
+// the flush that trails a successful unmount to settle.
+fn unmount_all_targets_blocking(
+    app: AppHandle,
+    force: bool,
+) -> Result<UnmountAllResult, DesktopError> {
+    if force {
+        require_force_unmount_allowed(&app)?;
+    }
+    let entries = list_active_entries()?;
+    if entries.is_empty() {
         return Ok(UnmountAllResult {
             attempted: 0,
             failed: Vec::new(),
+            busy: Vec::new(),
         });
     }
-    let _ = Command::new(mountos_path()?)
-        .args(["unmount", "--all", "-y"])
-        .output()?;
-    let failed = poll_unmount_all(&before, UNMOUNT_TIMEOUT)?;
+    let before: Vec<String> = entries.iter().map(|(target, _)| target.clone()).collect();
+
+    let mut args = vec!["unmount", "--all", "-y", "--json"];
+    if force {
+        args.push("--force");
+    }
+    let output = Command::new(mountos_path()?).args(&args).output()?;
+    let outcomes = parse_unmount_outcomes(&output.stdout, &output.stderr)?;
+
+    // Outcomes come back keyed by mountPath; the frontend tracks mounts by
+    // target, so translate before reporting or nothing matches on Windows.
+    let as_target = |mount_path: &str| -> String {
+        entries
+            .iter()
+            .find(|(_, path)| path == mount_path)
+            .map(|(target, _)| target.clone())
+            .unwrap_or_else(|| mount_path.to_string())
+    };
+    let failed: Vec<String> = outcomes
+        .iter()
+        .filter(|outcome| !outcome.unmounted())
+        .map(|outcome| as_target(&outcome.mount_path))
+        .collect();
+    let busy: Vec<String> = outcomes
+        .iter()
+        .filter(|outcome| outcome.busy)
+        .map(|outcome| as_target(&outcome.mount_path))
+        .collect();
+
+    // Everything the CLI unmounted is out of the mount table already, but its
+    // flush can straggle; wait for the list to settle so the UI does not keep
+    // showing a row that is on its way out. Only the targets that actually
+    // unmounted are waited on, because a busy one stays mounted by design and
+    // waiting on it would burn the whole timeout every time. The result is
+    // discarded and the error swallowed: the outcomes above are the answer, and
+    // a transient `list` failure here must not destroy them.
+    let settling: Vec<String> = before
+        .iter()
+        .filter(|target| !failed.iter().any(|f| f == *target))
+        .cloned()
+        .collect();
+    if !settling.is_empty() {
+        let _ = poll_unmount_all(&settling, UNMOUNT_TIMEOUT);
+    }
     Ok(UnmountAllResult {
         attempted: before.len(),
         failed,
+        busy,
     })
 }
 
@@ -2972,8 +3120,12 @@ fn poll_unmount_all(before: &[String], timeout: Duration) -> Result<Vec<String>,
 }
 
 #[tauri::command]
-async fn unmount_all_targets() -> Result<UnmountAllResult, DesktopError> {
-    tauri::async_runtime::spawn_blocking(unmount_all_targets_blocking)
+async fn unmount_all_targets(
+    app: AppHandle,
+    force: Option<bool>,
+) -> Result<UnmountAllResult, DesktopError> {
+    let force = force.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || unmount_all_targets_blocking(app, force))
         .await
         .map_err(|error| DesktopError::Message(format!("unmount-all task failed: {error}")))?
 }
