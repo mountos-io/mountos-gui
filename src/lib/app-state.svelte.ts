@@ -1357,7 +1357,10 @@ export async function runUnmountAll(force = false) {
       notify(`Unmounted all ${result.attempted} mounts`)
     } else {
       const busySuffix = result.busy.length > 0 ? ` (${result.busy.length} still in use and left mounted)` : ''
-      notify(`Unmounted ${result.attempted - result.failed.length} of ${result.attempted}; ${result.failed.length} failed${busySuffix}`, 'error')
+      // The attempted count and the outcomes come from two separate listings, so
+      // a mount that appeared in between can make failed exceed attempted.
+      const unmounted = Math.max(0, result.attempted - result.failed.length)
+      notify(`Unmounted ${unmounted} of ${result.attempted}; ${result.failed.length} failed${busySuffix}`, 'error')
     }
   } catch (error) {
     for (const key of keys) expectedGone.delete(key)
