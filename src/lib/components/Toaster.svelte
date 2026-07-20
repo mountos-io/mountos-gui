@@ -92,8 +92,39 @@
 </div>
 
 <style>
+  /* Matches admin-client's toast.css: angled cuts + diagonal corner accents
+     instead of this app's usual rounded .surface corners, so a notification
+     visually reads as the same "technical" chrome admin-client uses for
+     its own toasts, not the softer default card style. */
   .toast-item {
+    position: relative;
+    border-radius: 0;
+    clip-path: polygon(0 3px, 3px 0, 100% 0, 100% calc(100% - 3px), calc(100% - 3px) 100%, 0 100%);
     animation: toast-in 0.2s ease-out;
+  }
+
+  .toast-item::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(135deg, currentColor 1px, transparent 1px) 0 0 / 5px 5px,
+      linear-gradient(-45deg, currentColor 1px, transparent 1px) 100% 100% / 5px 5px;
+    background-repeat: no-repeat;
+    pointer-events: none;
+  }
+
+  .toast-item.text-success {
+    background-color: color-mix(in oklch, var(--card) 97%, var(--success));
+  }
+  .toast-item.text-destructive {
+    background-color: color-mix(in oklch, var(--card) 97%, var(--destructive));
+  }
+  .toast-item.text-warning {
+    background-color: color-mix(in oklch, var(--card) 97%, var(--warning));
+  }
+  .toast-item.text-primary {
+    background-color: color-mix(in oklch, var(--card) 97%, var(--primary));
   }
 
   @keyframes toast-in {
