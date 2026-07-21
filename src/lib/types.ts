@@ -1,7 +1,7 @@
 export type Backend = 'auto' | 'macfuse' | 'fskit' | 'nfs' | 'smb' | 'mountosio'
 export type SecretRef = 'vault' | 'prompt'
 export type ProfileKind = 'mount' | 'gateway'
-export type HealthState = 'healthy' | 'launching' | 'flushing' | 'limited' | 'lost' | 'stalled' | 'reconnecting' | 'idle'
+export type HealthState = 'healthy' | 'launching' | 'flushing' | 'lost' | 'stalled' | 'reconnecting' | 'idle'
 export type ErrorClass =
   | 'cli-unavailable'
   | 'auth'
@@ -65,7 +65,6 @@ export interface MountInstance {
   viewMode?: string
   volumeIdentifier?: string
   volumeId?: number
-  domainId?: string
   uncPath?: string
   versionInode?: string
   orphaned?: boolean

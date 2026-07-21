@@ -45,6 +45,7 @@ import {
   openDeletedView,
   openDiagnosticsBundle,
   openGateway,
+  openLostFound,
   openSnapshotView,
   openTarget,
   openVersionView,
@@ -314,8 +315,6 @@ const filteredInstances = $derived(
   }),
 )
 
-const limitedCount = $derived(state.systemState.instances.filter((instance) => instance.health === 'limited').length)
-
 // The selected profile always stays in the list even when it doesn't match
 // the search text -- filtering it out would silently swap what the editor
 // below is showing without any visible cue why it vanished from the list.
@@ -373,7 +372,6 @@ export const computed = {
   get selectedProfile() { return selectedProfile },
   get filteredInstances() { return filteredInstances },
   get filteredProfiles() { return filteredProfiles },
-  get limitedCount() { return limitedCount },
   get backends() { return backends },
   get mountPathError() { return mountPathError },
   get trimmedSecret() { return trimmedSecret },
@@ -1327,7 +1325,7 @@ export async function runUnmount(instance: MountInstance, force = false) {
   expectedGone.add(instance.key)
   markUnmountInFlight()
   try {
-    const result = await unmountTarget(instance.domainId || instance.mountPath, force)
+    const result = await unmountTarget(instance.mountPath, force)
     await refresh(false)
     notify(result.state === 'idle' ? 'Unmount complete' : 'Unmount is still flushing in the background')
   } catch (error) {
@@ -1411,6 +1409,14 @@ export async function runOpen(instance: MountInstance) {
 
 export function canOpen(instance: MountInstance) {
   return isAbsolutePath(instance.mountPath)
+}
+
+export async function runOpenLostFound(instance: MountInstance) {
+  try {
+    await openLostFound(instance.mountPath)
+  } catch (error) {
+    notify(error instanceof Error ? error.message : 'Failed to open .lost+found', 'error')
+  }
 }
 
 export async function toggleInstanceConfig(instance: MountInstance) {

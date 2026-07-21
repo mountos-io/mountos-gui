@@ -52,7 +52,7 @@
   async function runUnmount(instance: MountInstance) {
     busy = true
     try {
-      await unmountTarget(instance.domainId || instance.mountPath)
+      await unmountTarget(instance.mountPath)
       await refresh()
     } catch {
       // Quick-glance surface; detailed errors are reported in the main window.

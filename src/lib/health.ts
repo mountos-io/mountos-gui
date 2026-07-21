@@ -3,19 +3,18 @@ import type { Backend, HealthState } from './types'
 export function healthTone(health: HealthState | string): 'success' | 'destructive' | 'warning' | '' {
   if (health === 'healthy') return 'success'
   if (health === 'lost') return 'destructive'
-  if (health === 'limited' || health === 'launching') return 'warning'
+  if (health === 'launching') return 'warning'
   return ''
 }
 
 /**
  * Explains the state rather than restating it: the dot is the only thing on
- * screen once the Health column is gone, and "limited" or "lost" mean nothing
- * on their own. Doubles as the accessible name, so it must read as a sentence.
+ * screen once the Health column is gone, and "lost" means nothing on its
+ * own. Doubles as the accessible name, so it must read as a sentence.
  */
 export function healthTitle(health: HealthState | string): string {
   if (health === 'healthy') return 'Healthy: mounted and reporting live stats'
   if (health === 'lost') return 'Lost: no live process owns this mount; unmount to reclaim it'
-  if (health === 'limited') return 'Limited: mounted, but this backend cannot report live stats'
   if (health === 'launching') return 'Launching: the mount is still starting up'
   return `Unknown state: ${health}`
 }

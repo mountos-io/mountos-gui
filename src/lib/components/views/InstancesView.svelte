@@ -6,8 +6,10 @@
     EllipsisVertical,
     FilePlus,
     FolderOpen,
+    Ghost,
     History,
     LayoutDashboard,
+    Lightbulb,
     OctagonX,
     Recycle,
     Search,
@@ -40,6 +42,7 @@
     requestUnmountAll,
     requestVersionView,
     runOpen,
+    runOpenLostFound,
     saveAsProfile,
     stopGatewayLaunch,
     toggleInstanceConfig,
@@ -76,9 +79,6 @@
     </label>
     <div class="flex flex-wrap items-center gap-2">
       <Badge>{appState.systemState.instances.length} running</Badge>
-      {#if computed.limitedCount > 0}
-        <Badge variant="warning">{computed.limitedCount} limited</Badge>
-      {/if}
       <Button variant="destructive" disabled={appState.busy || appState.systemState.instances.length === 0} onclick={requestUnmountAll}>
         <Unplug size={16} aria-hidden="true" />
         Unmount all
@@ -239,6 +239,22 @@
                             <Copy size={16} aria-hidden="true" /> Clone profile
                           </DropdownMenu.Item>
                         {/if}
+                      {/if}
+                      <!-- .lost+found is a real directory inside the volume's
+                           own namespace, so it doesn't exist under a
+                           satellite Deleted/Version/Snapshot view -- same
+                           gate as Save-as-profile/Clone-profile above. -->
+                      {#if canOpen(instance) && !viewModeBadge(instance.viewMode)}
+                        <DropdownMenu.Item
+                          class="flex cursor-pointer items-center justify-between gap-2 px-4 py-2 text-sm outline-none data-highlighted:bg-accent"
+                          disabled={appState.busy}
+                          onSelect={() => runOpenLostFound(instance)}
+                        >
+                          <span class="flex items-center gap-2"><Ghost size={16} aria-hidden="true" /> Open zombie files</span>
+                          <span title="Files that lost their name or folder -- the .lost+found directory">
+                            <Lightbulb size={14} aria-hidden="true" class="text-muted-foreground" />
+                          </span>
+                        </DropdownMenu.Item>
                       {/if}
                       {#if canOpenViewsFor(instance)}
                         <DropdownMenu.Separator class="my-1 h-px bg-border" />

@@ -130,7 +130,6 @@ struct MountInstance {
     view_mode: Option<String>,
     volume_identifier: Option<String>,
     volume_id: Option<u32>,
-    domain_id: Option<String>,
     unc_path: Option<String>,
     version_inode: Option<String>,
     orphaned: Option<bool>,
@@ -1096,10 +1095,6 @@ fn list_contains_target(target: &str) -> Result<bool, DesktopError> {
             .get("mountPath")
             .and_then(Value::as_str)
             .is_some_and(|candidate| targets_equal(candidate, target))
-            || entry
-                .get("domainId")
-                .and_then(Value::as_str)
-                .is_some_and(|candidate| candidate == target)
     }))
 }
 
@@ -1447,20 +1442,13 @@ fn parse_instances_value(value: &Value) -> Vec<MountInstance> {
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string();
-            let domain_id = entry
-                .get("domainId")
-                .and_then(Value::as_str)
-                .map(ToString::to_string);
             let fs_name = entry
                 .get("fsName")
                 .and_then(Value::as_str)
                 .map(ToString::to_string);
             let orphaned = entry.get("orphaned").and_then(Value::as_bool);
-            // A domainId means the mount is keyed by an OS-managed identifier
-            // rather than a path this app can stat, so no live stats come back.
-            let limited = domain_id.is_some();
             MountInstance {
-                key: domain_id.clone().unwrap_or_else(|| mount_path.clone()),
+                key: mount_path.clone(),
                 name: entry
                     .get("name")
                     .and_then(Value::as_str)
@@ -1484,7 +1472,6 @@ fn parse_instances_value(value: &Value) -> Vec<MountInstance> {
                     .get("volumeId")
                     .and_then(Value::as_u64)
                     .and_then(|value| u32::try_from(value).ok()),
-                domain_id,
                 unc_path: entry
                     .get("uncPath")
                     .and_then(Value::as_str)
@@ -1501,14 +1488,7 @@ fn parse_instances_value(value: &Value) -> Vec<MountInstance> {
                 temporary_fork: None,
                 external: true,
                 profile_id: None,
-                health: if orphaned == Some(true) {
-                    "lost"
-                } else if limited {
-                    "limited"
-                } else {
-                    "healthy"
-                }
-                .to_string(),
+                health: if orphaned == Some(true) { "lost" } else { "healthy" }.to_string(),
             }
         })
         .collect()
@@ -2945,17 +2925,6 @@ async fn unmount_target(
 }
 
 fn list_active_targets() -> Result<Vec<String>, DesktopError> {
-    Ok(list_active_entries()?
-        .into_iter()
-        .map(|(target, _)| target)
-        .collect())
-}
-
-// Returns (target, mountPath) per active mount. The two differ whenever the
-// CLI reports a domainId, where that identifier is the target; `unmount --json`
-// keys its outcomes by mountPath, so mapping one to the other is what keeps a
-// per-mount verdict comparable to the target list the rest of this file works in.
-fn list_active_entries() -> Result<Vec<(String, String)>, DesktopError> {
     let output = command_output(&["list", "--json"])?;
     if !output.status.success() {
         return Err(DesktopError::Message(format!(
@@ -2971,17 +2940,7 @@ fn list_active_entries() -> Result<Vec<(String, String)>, DesktopError> {
         .unwrap_or_default();
     Ok(entries
         .iter()
-        .filter_map(|entry| {
-            let mount_path = entry.get("mountPath").and_then(Value::as_str);
-            let target = entry
-                .get("domainId")
-                .and_then(Value::as_str)
-                .or(mount_path)?;
-            Some((
-                target.to_string(),
-                mount_path.unwrap_or(target).to_string(),
-            ))
-        })
+        .filter_map(|entry| entry.get("mountPath").and_then(Value::as_str).map(ToString::to_string))
         .collect())
 }
 
@@ -2998,15 +2957,14 @@ fn unmount_all_targets_blocking(
     if force {
         require_force_unmount_allowed(&app)?;
     }
-    let entries = list_active_entries()?;
-    if entries.is_empty() {
+    let before = list_active_targets()?;
+    if before.is_empty() {
         return Ok(UnmountAllResult {
             attempted: 0,
             failed: Vec::new(),
             busy: Vec::new(),
         });
     }
-    let before: Vec<String> = entries.iter().map(|(target, _)| target.clone()).collect();
 
     let mut args = vec!["unmount", "--all", "-y", "--json"];
     if force {
@@ -3015,24 +2973,15 @@ fn unmount_all_targets_blocking(
     let output = Command::new(mountos_path()?).args(&args).output()?;
     let outcomes = parse_unmount_outcomes(&output.stdout, &output.stderr)?;
 
-    // Outcomes come back keyed by mountPath; the frontend tracks mounts by
-    // target, so translate before reporting or nothing matches on Windows.
-    let as_target = |mount_path: &str| -> String {
-        entries
-            .iter()
-            .find(|(_, path)| path == mount_path)
-            .map(|(target, _)| target.clone())
-            .unwrap_or_else(|| mount_path.to_string())
-    };
     let failed: Vec<String> = outcomes
         .iter()
         .filter(|outcome| !outcome.unmounted())
-        .map(|outcome| as_target(&outcome.mount_path))
+        .map(|outcome| outcome.mount_path.clone())
         .collect();
     let busy: Vec<String> = outcomes
         .iter()
         .filter(|outcome| outcome.busy)
-        .map(|outcome| as_target(&outcome.mount_path))
+        .map(|outcome| outcome.mount_path.clone())
         .collect();
 
     // Everything the CLI unmounted is out of the mount table already, but its
@@ -3576,6 +3525,27 @@ fn open_target(target: String) -> Result<(), DesktopError> {
     Ok(())
 }
 
+// Opens the mount's reserved .lost+found directory -- every mountOS volume
+// keeps one (server-side: internal/constants.LostFoundName), holding files
+// whose original name/parent link was lost to a crash or cleanup. Mirrors
+// open_target's guard: target must still be a live mount, the subpath itself
+// is fixed rather than frontend-supplied.
+#[tauri::command]
+fn open_lost_found(target: String) -> Result<(), DesktopError> {
+    if !is_openable_target(&target) {
+        return Err(DesktopError::Message(
+            "mount target is not an absolute filesystem path".to_string(),
+        ));
+    }
+    if !list_contains_target(&target)? {
+        return Err(DesktopError::Message(
+            "refusing to open a path that is not an active mount target".to_string(),
+        ));
+    }
+    open::that_detached(PathBuf::from(&target).join(".lost+found"))?;
+    Ok(())
+}
+
 // Opens a diagnostics bundle this app wrote.
 //
 // Mirrors open_target's guard: the path is confined to our own diagnostics
@@ -3842,6 +3812,7 @@ pub fn run() {
             unmount_target,
             unmount_all_targets,
             open_target,
+            open_lost_found,
             get_instance_config,
             launch_dashboard,
             create_diagnostics_bundle,

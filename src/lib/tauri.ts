@@ -65,7 +65,7 @@ export async function getSystemState(): Promise<SystemState> {
           fsName: 'nfs',
           volumeId: 1,
           external: false,
-          health: 'limited',
+          health: 'healthy',
         },
       ],
       cliPathAlternates: [],
@@ -222,6 +222,11 @@ export async function unmountAllTargets(force = false): Promise<UnmountAllResult
 export async function openTarget(target: string): Promise<void> {
   if (!hasDesktopBridge()) return
   await invoke('open_target', { target })
+}
+
+export async function openLostFound(target: string): Promise<void> {
+  if (!hasDesktopBridge()) return
+  await invoke('open_lost_found', { target })
 }
 
 export async function openDiagnosticsBundle(path: string): Promise<void> {
