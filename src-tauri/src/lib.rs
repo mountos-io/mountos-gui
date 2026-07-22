@@ -2469,6 +2469,10 @@ async fn open_deleted_view(
     .map_err(|error| DesktopError::Message(format!("deleted view task failed: {error}")))?
 }
 
+// Bundling path/inode/version_format/idle_timeout/secret/full_chain into a
+// struct would need the frontend's flat invoke() payload nested under a new
+// key to match -- one arg per Tauri-visible field is the plainer tradeoff.
+#[allow(clippy::too_many_arguments)]
 fn open_version_view_blocking(
     app: AppHandle,
     profile_id: String,
@@ -2528,6 +2532,7 @@ fn open_version_view_blocking(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn open_version_view(
     app: AppHandle,
     profile_id: String,
