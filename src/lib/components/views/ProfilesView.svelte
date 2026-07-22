@@ -280,7 +280,7 @@
             label="Temporary fork"
           />
           <InfoTip
-            text="For trying something out, not for anything you need to keep. The server only tracks that this fork exists -- the files you write here stay on this device and disappear as soon as you unmount. **They're not backed up anywhere else**: if this device runs low on disk space, those writes can fail and that data is gone for good. The volume you forked from is never touched."
+            text="For trying something out, not for anything you need to keep. Files inherited unchanged from the volume you forked are completely safe. **Only what you create or edit inside this fork is at risk**: that data lives on this device alone, is never backed up, and disappears the moment you unmount. If your disk runs low on space, those writes can fail and that data is gone for good. The volume you forked from is never touched."
           />
         </span>
       </div>
