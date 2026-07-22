@@ -27,6 +27,7 @@
   import { Badge } from '$lib/components/ui/badge'
   import Callout from '$lib/components/Callout.svelte'
   import CommandPreview from '$lib/components/CommandPreview.svelte'
+  import InfoTip from '$lib/components/shared/InfoTip.svelte'
   import ForkBrowserView from '$lib/components/views/ForkBrowserView.svelte'
   import { FSKIT_MOUNT_PREFIX } from '$lib/cli'
   import { volumeKindBadgeStyle } from '$lib/health'
@@ -272,12 +273,16 @@
 
       <div class="flex flex-wrap gap-4">
         <Checkbox checked={selectedProfile.readOnly} onchange={(e) => patchProfile({ readOnly: e.currentTarget.checked })} label="Read only" />
-        <Checkbox
-          checked={selectedProfile.temporaryFork}
-          onchange={(e) => patchProfile({ temporaryFork: e.currentTarget.checked })}
-          label="Temporary fork"
-          title="Ephemeral fork for this session; discarded on unmount, volume untouched"
-        />
+        <span class="inline-flex items-center gap-1">
+          <Checkbox
+            checked={selectedProfile.temporaryFork}
+            onchange={(e) => patchProfile({ temporaryFork: e.currentTarget.checked })}
+            label="Temporary fork"
+          />
+          <InfoTip
+            text="For trying something out, not for anything you need to keep. The server only tracks that this fork exists -- the files you write here stay on this device and disappear as soon as you unmount. **They're not backed up anywhere else**: if this device runs low on disk space, those writes can fail and that data is gone for good. The volume you forked from is never touched."
+          />
+        </span>
       </div>
 
       <div class="grid gap-1.5">
