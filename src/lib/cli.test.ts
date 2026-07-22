@@ -177,19 +177,28 @@ describe('cli helpers', () => {
   })
 
   it('builds version argv with --destination, -i, and omits the default format', () => {
-    const argv = buildVersionArgv(profile, '/tmp/version-view', '9007199254740993')
+    const argv = buildVersionArgv(profile, '/tmp/version-view', { inode: '9007199254740993' })
     expect(argv).toEqual(expect.arrayContaining(['-i', '9007199254740993']))
     expect(argv.some((arg) => arg.startsWith('--version-format'))).toBe(false)
+    expect(argv).not.toContain('--full-chain')
+    expect(argv).not.toContain('--path')
 
-    const dated = buildVersionArgv(profile, '/tmp/version-view', '1', 'date', '5m')
+    const dated = buildVersionArgv(profile, '/tmp/version-view', { inode: '1' }, 'date', '5m')
     expect(dated).toContain('--version-format=date')
     expect(dated).toContain('--idle-timeout=5m')
 
     // cmd_version.go checks `format != "number" && format != "date"` with no
     // trimming, so a padded value must be trimmed here to pass that check.
-    const padded = buildVersionArgv(profile, '/tmp/version-view', '1', '  date  ', '  5m  ')
+    const padded = buildVersionArgv(profile, '/tmp/version-view', { inode: '1' }, '  date  ', '  5m  ')
     expect(padded).toContain('--version-format=date')
     expect(padded).toContain('--idle-timeout=5m')
+  })
+
+  it('builds version argv with --path and --full-chain for the browse-picked selector', () => {
+    const argv = buildVersionArgv(profile, '/tmp/version-view', { path: '/Volumes/data/report.txt' }, 'number', undefined, true)
+    expect(argv).toEqual(expect.arrayContaining(['--path', '/Volumes/data/report.txt']))
+    expect(argv).not.toContain('-i')
+    expect(argv).toContain('--full-chain')
   })
 
   it('never emits --type or a volume flag for fork commands', () => {

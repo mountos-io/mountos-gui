@@ -795,16 +795,30 @@ fn build_deleted_argv(
     argv
 }
 
+// Exactly one of path/inode is expected (validated by the caller before this
+// runs); path is preferred if both are somehow set. path lets the CLI
+// resolve inode/parent/name itself via stat(2) and enables multi-key
+// discovery (see mountos-servers cmd_version.go); inode is the advanced/
+// power-user fallback, a plain by-inode lookup only.
 fn build_version_argv(
     profile: &MountProfile,
     destination: &str,
-    inode: u64,
+    path: Option<&str>,
+    inode: Option<u64>,
     version_format: Option<&str>,
     idle_timeout: Option<&str>,
+    full_chain: bool,
 ) -> Vec<String> {
     let mut argv = build_satellite_prefix("version", profile, "version");
     argv.extend(["--destination".to_string(), destination.to_string()]);
-    argv.extend(["-i".to_string(), inode.to_string()]);
+    if let Some(path) = path {
+        argv.extend(["--path".to_string(), path.to_string()]);
+    } else if let Some(inode) = inode {
+        argv.extend(["-i".to_string(), inode.to_string()]);
+    }
+    if full_chain {
+        argv.push("--full-chain".to_string());
+    }
     if let Some(format) = version_format
         .map(str::trim)
         .filter(|value| !value.is_empty() && *value != "number")
@@ -2459,19 +2473,28 @@ fn open_version_view_blocking(
     app: AppHandle,
     profile_id: String,
     destination: String,
-    inode: String,
+    path: Option<String>,
+    inode: Option<String>,
     version_format: Option<String>,
     idle_timeout: Option<String>,
     secret: Option<String>,
+    full_chain: bool,
 ) -> Result<MountResult, DesktopError> {
     let mut profile = find_profile(&app, &profile_id)?;
     validate_view_destination(&profile, &destination)?;
+    let path = path.as_deref().map(str::trim).filter(|value| !value.is_empty());
     // Inodes travel as strings end-to-end (see MountInstance.version_inode):
     // a JS `number` silently loses precision above Number.MAX_SAFE_INTEGER.
-    let parsed_inode: u64 = inode
-        .trim()
-        .parse()
-        .map_err(|_| DesktopError::Message(format!("invalid inode number: {inode:?}")))?;
+    let parsed_inode: Option<u64> = match inode.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        Some(raw) => Some(
+            raw.parse()
+                .map_err(|_| DesktopError::Message(format!("invalid inode number: {raw:?}")))?,
+        ),
+        None => None,
+    };
+    if path.is_none() && parsed_inode.is_none() {
+        return Err(DesktopError::Message("provide a file path or an inode number".to_string()));
+    }
     validate_backend_for_platform(&profile.backend)?;
     resolve_auto_backend(&mut profile)?;
     if list_contains_target(&destination)? {
@@ -2484,9 +2507,11 @@ fn open_version_view_blocking(
     let args = build_version_argv(
         &profile,
         &destination,
+        path,
         parsed_inode,
         version_format.as_deref(),
         idle_timeout.as_deref(),
+        full_chain,
     );
     let suffix = short_hash(&destination);
     let stderr_path = runtime_dir(&app)?.join(format!("version-{}-{suffix}-stderr.log", profile.id));
@@ -2507,20 +2532,24 @@ async fn open_version_view(
     app: AppHandle,
     profile_id: String,
     destination: String,
-    inode: String,
+    path: Option<String>,
+    inode: Option<String>,
     version_format: Option<String>,
     idle_timeout: Option<String>,
     secret: Option<String>,
+    full_chain: bool,
 ) -> Result<MountResult, DesktopError> {
     tauri::async_runtime::spawn_blocking(move || {
         open_version_view_blocking(
             app,
             profile_id,
             destination,
+            path,
             inode,
             version_format,
             idle_timeout,
             secret,
+            full_chain,
         )
     })
     .await
@@ -4191,7 +4220,7 @@ mod tests {
         // Round-trips at u64::MAX unchanged: the string-not-number decision
         // guards against precision loss above Number.MAX_SAFE_INTEGER on the
         // JS side, which a numeric type here would silently reintroduce.
-        let argv = build_version_argv(&profile(), "/tmp/version-view", u64::MAX, None, None);
+        let argv = build_version_argv(&profile(), "/tmp/version-view", None, Some(u64::MAX), None, None, false);
         assert!(argv
             .windows(2)
             .any(|pair| pair == ["-i", &u64::MAX.to_string()]));
@@ -4201,16 +4230,35 @@ mod tests {
         // "number" is the CLI's own default; omit the flag rather than
         // stating the default explicitly.
         assert!(!argv.iter().any(|arg| arg.starts_with("--version-format")));
+        assert!(!argv.contains(&"--full-chain".to_string()));
 
-        let dated = build_version_argv(&profile(), "/tmp/version-view", 1, Some("date"), Some("5m"));
+        let dated = build_version_argv(&profile(), "/tmp/version-view", None, Some(1), Some("date"), Some("5m"), false);
         assert!(dated.contains(&"--version-format=date".to_string()));
         assert!(dated.contains(&"--idle-timeout=5m".to_string()));
 
         // cmd_version.go checks `format != "number" && format != "date"` with
         // no trimming, so a padded value must be trimmed here or it fails
         // that exact-match check server-side.
-        let padded = build_version_argv(&profile(), "/tmp/version-view", 1, Some("  date  "), None);
+        let padded = build_version_argv(&profile(), "/tmp/version-view", None, Some(1), Some("  date  "), None, false);
         assert!(padded.contains(&"--version-format=date".to_string()));
+    }
+
+    #[test]
+    fn builds_version_argv_with_path_and_full_chain() {
+        let argv = build_version_argv(
+            &profile(),
+            "/tmp/version-view",
+            Some("/Volumes/data/report.txt"),
+            None,
+            None,
+            None,
+            true,
+        );
+        assert!(argv
+            .windows(2)
+            .any(|pair| pair == ["--path", "/Volumes/data/report.txt"]));
+        assert!(!argv.contains(&"-i".to_string()));
+        assert!(argv.contains(&"--full-chain".to_string()));
     }
 
     // Windows has no safe no-flag default (cli_windows.go hard-codes mountosio
@@ -4371,7 +4419,7 @@ mod tests {
         let p = profile();
         let snapshot = build_snapshot_argv(&p, "/tmp/snap-view", "1d");
         let deleted = build_deleted_argv(&p, "/tmp/deleted-view", None, None);
-        let version = build_version_argv(&p, "/tmp/version-view", 1, None, None);
+        let version = build_version_argv(&p, "/tmp/version-view", None, Some(1), None, None, false);
         let gateway_only = build_gateway_argv(&p, &["s3".to_string()], None, true, false, None, None);
         for argv in [&snapshot, &deleted, &version, &gateway_only] {
             assert!(

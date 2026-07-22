@@ -21,6 +21,7 @@ import {
 import { viewModeBadge } from './health'
 import {
   browseFolder,
+  browseVersionFile as pickVersionFile,
   createDiagnosticsBundle,
   defaultViewDestination,
   deleteProfile,
@@ -223,7 +224,11 @@ const state = $state({
 
   versionPromptFor: null as MountProfile | null,
   versionDestination: '',
+  versionPath: '',
+  // Advanced/power-user fallback: hand-typed inode, plain by-inode lookup
+  // only (no browse-derived parent/name, so no multi-key discovery).
   versionInode: '',
+  versionFullChain: false,
   versionFormat: 'number' as 'number' | 'date',
   versionIdleTimeout: '30m',
   versionSecretValue: '',
@@ -598,6 +603,14 @@ export function profileForInstance(instance: MountInstance): MountProfile | unde
   return state.profiles.find((candidate) => candidate.id === instance.profileId)
 }
 
+// The profile's primary data mount, if currently mounted -- excludes
+// satellite view instances (deleted/version/snapshot), same filter as
+// canOpenViewsFor. Used to root the version-view file browser at a real,
+// live mount path.
+export function primaryInstanceForProfile(profileId: string): MountInstance | undefined {
+  return state.systemState.instances.find((instance) => instance.profileId === profileId && !viewModeBadge(instance.viewMode))
+}
+
 // Credentials/discoveryUrl/fork are all resolved from the matching profile,
 // exactly like cloneProfileFor -- external (non-profile-backed) instances
 // have no retrievable credentials, so these actions never apply to them.
@@ -877,7 +890,9 @@ export async function requestVersionView(profile: MountProfile | undefined) {
   if (!profile) return
   state.versionPromptFor = profile
   state.versionDestination = ''
+  state.versionPath = ''
   state.versionInode = ''
+  state.versionFullChain = false
   state.versionFormat = 'number'
   state.versionIdleTimeout = '30m'
   state.versionSecretValue = ''
@@ -903,9 +918,47 @@ export async function browseVersionDestination() {
   if (chosen) state.versionDestination = chosen
 }
 
+// Primary action for the mounted case: pick a file directly from the live
+// mount. Rooting the native picker there is enough -- the CLI resolves
+// inode/parent/name itself via stat(2), see buildVersionArgv/--path.
+export async function browseVersionFile(profile: MountProfile) {
+  const instance = primaryInstanceForProfile(profile.id)
+  if (!instance?.mountPath) return
+  const chosen = await pickVersionFile(`Choose a file from "${profile.name}"`, instance.mountPath)
+  if (chosen) {
+    state.versionPath = chosen
+    state.versionError = ''
+  }
+}
+
+// Unmounted case: mount the profile first (reusing the normal mount flow,
+// including its own secret-prompt handling), then open the same file
+// picker if the mount completed synchronously (secret already in vault).
+// If a secret prompt interrupted it, the user completes that via the
+// existing flow and can click Browse again once mounted. If the mount
+// failed outright, runMount/doMount already reported it via their own
+// error toast -- do not also emit a second, contradictory "Mounting..."
+// toast implying it's still in progress.
+export async function mountAndBrowseVersionFile(profile: MountProfile) {
+  await runMount(profile)
+  if (state.secretPromptFor) {
+    notify('Enter the secret to finish mounting, then click Browse to pick a file.')
+    return
+  }
+  const instance = primaryInstanceForProfile(profile.id)
+  if (!instance?.mountPath) return
+  await browseVersionFile(profile)
+}
+
 export async function confirmVersionView() {
   const profile = state.versionPromptFor
   if (!profile) return
+  const path = state.versionPath.trim()
+  const inode = state.versionInode.trim()
+  if (!path && !inode) {
+    state.versionError = 'Browse to a file, or enter an inode number'
+    return
+  }
   state.busy = true
   state.versionError = ''
   try {
@@ -913,10 +966,11 @@ export async function confirmVersionView() {
     const result = await openVersionView(
       profile.id,
       destination,
-      state.versionInode.trim(),
+      path ? { path } : { inode },
       state.versionFormat,
       state.versionIdleTimeout.trim() || undefined,
       state.versionSecretValue || undefined,
+      state.versionFullChain,
     )
     state.versionPromptFor = null
     state.versionSecretValue = ''

@@ -238,16 +238,25 @@ export function buildDeletedArgv(
   return argv
 }
 
+// selector picks the target: a browsed local path (preferred -- lets the CLI
+// resolve inode/parent/name itself and enables multi-key discovery) or a
+// hand-typed inode (advanced/power-user fallback, plain by-inode lookup only).
 export function buildVersionArgv(
   profile: MountProfile,
   destination: string,
-  inode: string,
+  selector: { path: string } | { inode: string },
   versionFormat?: string,
   idleTimeout?: string,
+  fullChain?: boolean,
 ): string[] {
   const argv = buildSatellitePrefix('version', profile, 'version')
   argv.push('--destination', destination)
-  argv.push('-i', inode)
+  if ('path' in selector) {
+    argv.push('--path', selector.path)
+  } else {
+    argv.push('-i', selector.inode)
+  }
+  if (fullChain) argv.push('--full-chain')
   if (versionFormat?.trim() && versionFormat.trim() !== 'number') argv.push(`--version-format=${versionFormat.trim()}`)
   if (idleTimeout?.trim()) argv.push(`--idle-timeout=${idleTimeout.trim()}`)
   pushSatelliteCredentials(argv, profile)

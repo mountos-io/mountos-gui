@@ -179,19 +179,22 @@ export async function openDeletedView(
 export async function openVersionView(
   profileId: string,
   destination: string,
-  inode: string,
+  selector: { path: string } | { inode: string },
   versionFormat?: string,
   idleTimeout?: string,
   secret?: string,
+  fullChain?: boolean,
 ): Promise<MountResult> {
   if (!hasDesktopBridge()) throw new Error('Desktop bridge unavailable')
   return invoke<MountResult>('open_version_view', {
     profileId,
     destination,
-    inode,
+    path: 'path' in selector ? selector.path : undefined,
+    inode: 'inode' in selector ? selector.inode : undefined,
     versionFormat,
     idleTimeout,
     secret,
+    fullChain,
   })
 }
 
@@ -287,6 +290,16 @@ export async function browseFolder(title: string, defaultPath?: string): Promise
   // not-yet-existing destination (e.g. defaultViewDestination) can still
   // create it from within the picker instead of only picking existing ones.
   const selected = await open({ directory: true, multiple: false, title, defaultPath, canCreateDirectories: true })
+  return typeof selected === 'string' ? selected : null
+}
+
+// Picks a single file under a mounted volume's live mount path. mountOS
+// volumes are real OS mounts, so the picked absolute path is enough -- the
+// CLI resolves inode/parent/name itself via stat(2), no control-socket round
+// trip needed here.
+export async function browseVersionFile(title: string, mountPath: string): Promise<string | null> {
+  if (!hasDesktopBridge()) return null
+  const selected = await open({ directory: false, multiple: false, title, defaultPath: mountPath })
   return typeof selected === 'string' ? selected : null
 }
 
