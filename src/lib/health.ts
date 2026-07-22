@@ -1,4 +1,4 @@
-import type { Backend, HealthState } from './types'
+import type { Backend, GatewayEndpointInfo, HealthState } from './types'
 
 export function healthTone(health: HealthState | string): 'success' | 'destructive' | 'warning' | '' {
   if (health === 'healthy') return 'success'
@@ -33,6 +33,27 @@ export function viewModeBadge(viewMode?: string): string | null {
   if (viewMode.includes('ver')) return 'Version view'
   if (viewMode.includes('snap')) return 'Snapshot view'
   return null
+}
+
+/**
+ * A gateway-only instance has no mountPath -- this is its Target column
+ * stand-in. A single endpoint (the common case) shows just the bare URL;
+ * multiple protocols (s3 + hdfs) are labeled so they aren't ambiguous.
+ */
+export function gatewayTargetLabel(endpoints?: GatewayEndpointInfo[]): string {
+  if (!endpoints || endpoints.length === 0) return ''
+  if (endpoints.length === 1) return endpoints[0].url
+  return endpoints.map((endpoint) => `${endpoint.protocol}: ${endpoint.url}`).join(', ')
+}
+
+/**
+ * Backend column stand-in for a gateway-only instance: the API it actually
+ * exposes (s3, hdfs, or both), not the FUSE transport concept "backend"
+ * means for a real mount -- a gateway has no FUSE transport at all.
+ */
+export function gatewayProtocolsLabel(endpoints?: GatewayEndpointInfo[]): string {
+  if (!endpoints || endpoints.length === 0) return 'gateway'
+  return endpoints.map((endpoint) => endpoint.protocol).join(', ')
 }
 
 // 'auto' isn't a real backend identity (it means "let the CLI decide"), so it

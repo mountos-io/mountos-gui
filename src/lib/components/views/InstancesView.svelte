@@ -24,7 +24,7 @@
   import { Skeleton } from '$lib/components/ui/skeleton'
   import GatewayLaunchesPanel from '$lib/components/GatewayLaunchesPanel.svelte'
   import InstanceConfigPanel from '$lib/components/InstanceConfigPanel.svelte'
-  import { backendBadgeStyle, formatMountedSince, formatUptime, healthTitle, healthTone, viewModeBadge, volumeKindBadgeStyle } from '$lib/health'
+  import { backendBadgeStyle, formatMountedSince, formatUptime, gatewayProtocolsLabel, gatewayTargetLabel, healthTitle, healthTone, viewModeBadge, volumeKindBadgeStyle } from '$lib/health'
   import type { MountInstance } from '$lib/types'
   import {
     appState,
@@ -54,6 +54,18 @@
   // profile-backed mounts (see detect_and_persist_volume_kind server-side).
   function volumeKindFor(instance: MountInstance): string | undefined {
     return instance.volumeKind ?? profileForInstance(instance)?.volumeKind
+  }
+
+  // Same fallback shape as volumeKindFor: instance.temporaryFork is a
+  // best-effort live read off .mountOS/.config (read_instance_config_extras
+  // silently falls back to undefined on any read failure -- unmounted
+  // mid-poll, .config not written yet, unexpected shape), so relying on it
+  // alone means the badge can silently vanish for a mount that IS a
+  // temporary fork, right when a user most needs the warning (its data is
+  // ephemeral and about to disappear). The profile's own temporaryFork is a
+  // persisted, reliable answer for anything profile-backed.
+  function isTemporaryFork(instance: MountInstance): boolean {
+    return Boolean(instance.temporaryFork ?? profileForInstance(instance)?.temporaryFork)
   }
 
   // "Open folder" moved to a direct action button, so it's no longer the one
@@ -157,7 +169,7 @@
                     {volumeKindFor(instance) === 'iceberg' ? 'Iceberg' : 'General'}
                   </Badge>
                 {/if}
-                {#if instance.temporaryFork}
+                {#if isTemporaryFork(instance)}
                   <Badge variant="warning" title="This mount is on a temporary fork, cleaned up when it's deleted">Temp fork</Badge>
                 {/if}
                 {#if gatewayInfoForInstance(instance)}
@@ -176,14 +188,48 @@
                 {/if}
               </span>
             </Table.Cell>
-            <Table.Cell><code>{instance.mountPath}</code></Table.Cell>
-            <Table.Cell><Badge variant="secondary" style={backendBadgeStyle(instance.backend)}>{instance.backend ?? 'unknown'}</Badge></Table.Cell>
+            <Table.Cell>
+              {#if instance.kind === 'gateway'}
+                <code>{gatewayTargetLabel(instance.gatewayEndpoints)}</code>
+              {:else}
+                <code>{instance.mountPath}</code>
+                <!-- A mount that also runs a --gateway-attached embedded
+                     gateway (same process, folded onto this entry
+                     server-side by pid) gets its endpoints listed below the
+                     mount path, one per protocol -- badged so a reader
+                     doesn't have to guess which URL is s3 vs. hdfs. -->
+                {#if instance.gatewayEndpoints?.length}
+                  <div class="mt-1 flex flex-col gap-1">
+                    {#each instance.gatewayEndpoints as endpoint (endpoint.protocol)}
+                      <div class="flex items-center gap-2">
+                        <Badge variant="secondary" class="uppercase">{endpoint.protocol}</Badge>
+                        <code class="text-xs">{endpoint.url}</code>
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
+              {/if}
+            </Table.Cell>
+            <Table.Cell>
+              {#if instance.kind === 'gateway'}
+                <Badge variant="secondary">{gatewayProtocolsLabel(instance.gatewayEndpoints)}</Badge>
+              {:else}
+                <Badge variant="secondary" style={backendBadgeStyle(instance.backend)}>{instance.backend ?? 'unknown'}</Badge>
+              {/if}
+            </Table.Cell>
             <Table.Cell>
               <div class="flex flex-nowrap items-center gap-2">
                 <Button variant="outline" size="icon" title="Open folder" aria-label="Open folder" disabled={appState.busy || !canOpen(instance)} onclick={() => runOpen(instance)}>
                   <FolderOpen size={16} aria-hidden="true" />
                 </Button>
-                <Button variant="destructive" size="icon" title="Unmount" aria-label="Unmount" disabled={appState.busy} onclick={() => requestUnmount(instance)}>
+                <Button
+                  variant="destructive"
+                  size="icon"
+                  title={instance.kind === 'gateway' ? "Can't stop a gateway this app didn't launch" : 'Unmount'}
+                  aria-label="Unmount"
+                  disabled={appState.busy || instance.kind === 'gateway'}
+                  onclick={() => requestUnmount(instance)}
+                >
                   <Unplug size={16} aria-hidden="true" />
                 </Button>
                 {#if hasMoreActions(instance)}

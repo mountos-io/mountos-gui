@@ -133,6 +133,12 @@ struct MountInstance {
     unc_path: Option<String>,
     version_inode: Option<String>,
     orphaned: Option<bool>,
+    // "mount" (the default assumed by an older CLI that predates this field)
+    // or "gateway" -- a gateway-only instance has no mountPath/backend/
+    // fsName at all, only gatewayEndpoints, and the frontend must branch on
+    // this before assuming any of those are populated.
+    kind: Option<String>,
+    gateway_endpoints: Option<Vec<GatewayEndpointInfo>>,
     // Not part of `mountos list --json` (confirmed: name/mountPath/fsName/
     // viewMode/backend/etc only) -- filled in afterward from each instance's
     // own .mountOS/.config, the same file get_instance_config reads.
@@ -1447,8 +1453,39 @@ fn parse_instances_value(value: &Value) -> Vec<MountInstance> {
                 .and_then(Value::as_str)
                 .map(ToString::to_string);
             let orphaned = entry.get("orphaned").and_then(Value::as_bool);
+            let volume_identifier = entry
+                .get("volumeIdentifier")
+                .and_then(Value::as_str)
+                .map(ToString::to_string);
+            let gateway_endpoints = entry
+                .get("gatewayEndpoints")
+                .and_then(Value::as_object)
+                .map(|endpoints| {
+                    endpoints
+                        .iter()
+                        .filter_map(|(protocol, endpoint)| {
+                            Some(GatewayEndpointInfo {
+                                protocol: protocol.clone(),
+                                url: endpoint.get("url").and_then(Value::as_str)?.to_string(),
+                                region: endpoint
+                                    .get("region")
+                                    .and_then(Value::as_str)
+                                    .map(ToString::to_string),
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .filter(|endpoints| !endpoints.is_empty());
+            // A "gateway" entry has no mountPath, so its key falls back to the
+            // volume identifier (always present for both kinds) to stay unique
+            // and stable across polls.
+            let key = if mount_path.is_empty() {
+                volume_identifier.clone().unwrap_or_default()
+            } else {
+                mount_path.clone()
+            };
             MountInstance {
-                key: mount_path.clone(),
+                key,
                 name: entry
                     .get("name")
                     .and_then(Value::as_str)
@@ -1464,10 +1501,7 @@ fn parse_instances_value(value: &Value) -> Vec<MountInstance> {
                     .get("viewMode")
                     .and_then(Value::as_str)
                     .map(ToString::to_string),
-                volume_identifier: entry
-                    .get("volumeIdentifier")
-                    .and_then(Value::as_str)
-                    .map(ToString::to_string),
+                volume_identifier,
                 volume_id: entry
                     .get("volumeId")
                     .and_then(Value::as_u64)
@@ -1481,6 +1515,8 @@ fn parse_instances_value(value: &Value) -> Vec<MountInstance> {
                     .and_then(Value::as_str)
                     .map(ToString::to_string),
                 orphaned,
+                kind: entry.get("kind").and_then(Value::as_str).map(ToString::to_string),
+                gateway_endpoints,
                 // All are filled in / corrected afterward in get_system_state
                 // -- listing alone can't know any of them.
                 mount_time: None,
@@ -4056,6 +4092,28 @@ mod tests {
             Some("9007199254740993")
         );
         assert_eq!(instances[0].health, "lost");
+    }
+
+    #[test]
+    fn parses_gateway_only_entries_with_endpoint_target() {
+        let value = serde_json::json!([{
+            "kind": "gateway",
+            "name": "Vol-object",
+            "volumeIdentifier": "019d19b9-dae5-7000-ac89-60c07d76c408",
+            "gatewayEndpoints": {
+                "s3": { "url": "http://127.0.0.1:18280", "region": "mountos" }
+            },
+            "pid": 339
+        }]);
+        let instances = parse_instances_value(&value);
+        assert_eq!(instances[0].kind.as_deref(), Some("gateway"));
+        assert!(instances[0].mount_path.is_empty());
+        // No mountPath to key on -- falls back to the volume identifier.
+        assert_eq!(instances[0].key, "019d19b9-dae5-7000-ac89-60c07d76c408");
+        let endpoints = instances[0].gateway_endpoints.as_ref().expect("endpoints");
+        assert_eq!(endpoints.len(), 1);
+        assert_eq!(endpoints[0].protocol, "s3");
+        assert_eq!(endpoints[0].url, "http://127.0.0.1:18280");
     }
 
     #[test]
