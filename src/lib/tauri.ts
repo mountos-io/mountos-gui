@@ -212,6 +212,11 @@ export async function stopGateway(pid: number): Promise<void> {
   await invoke('stop_gateway', { pid })
 }
 
+export async function stopGatewayOnly(pid: number): Promise<void> {
+  if (!hasDesktopBridge()) throw new Error('Desktop bridge unavailable')
+  await invoke('stop_gateway_only', { pid })
+}
+
 export async function unmountTarget(target: string, force = false): Promise<UnmountResult> {
   if (!hasDesktopBridge()) throw new Error('Desktop bridge unavailable')
   return invoke<UnmountResult>('unmount_target', { target, force })

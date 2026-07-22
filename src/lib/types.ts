@@ -71,6 +71,8 @@ export interface MountInstance {
   /** "mount" (implied when absent, for an older CLI) or "gateway" -- a gateway-only instance has no mountPath/backend/fsName, only gatewayEndpoints. */
   kind?: 'mount' | 'gateway'
   gatewayEndpoints?: GatewayEndpointInfo[]
+  /** Only meaningful for a "gateway" entry -- lets Stop gateway target the right process. */
+  pid?: number
   /** ISO timestamp from this instance's own .mountOS/.config, read fresh on every poll. */
   mountTime?: string
   /** "general"/"iceberg" from this instance's own .mountOS/.config -- unlike MountProfile.volumeKind, works for external mounts too. */

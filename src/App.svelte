@@ -11,6 +11,7 @@
   import SecretPromptDialog from '$lib/components/dialogs/SecretPromptDialog.svelte'
   import DeleteProfileDialog from '$lib/components/dialogs/DeleteProfileDialog.svelte'
   import UnmountDialog from '$lib/components/dialogs/UnmountDialog.svelte'
+  import StopGatewayDialog from '$lib/components/dialogs/StopGatewayDialog.svelte'
   import SnapshotDialog from '$lib/components/dialogs/SnapshotDialog.svelte'
   import DeletedViewDialog from '$lib/components/dialogs/DeletedViewDialog.svelte'
   import VersionViewDialog from '$lib/components/dialogs/VersionViewDialog.svelte'
@@ -253,6 +254,7 @@
 <SecretPromptDialog />
 <DeleteProfileDialog />
 <UnmountDialog />
+<StopGatewayDialog />
 <SnapshotDialog />
 <DeletedViewDialog />
 <VersionViewDialog />

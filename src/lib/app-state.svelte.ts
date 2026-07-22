@@ -54,6 +54,7 @@ import {
   saveSettings,
   setProfileSecret,
   stopGateway,
+  stopGatewayOnly,
   unmountTarget,
   unmountAllTargets,
 } from './tauri'
@@ -159,6 +160,9 @@ const state = $state({
   // Per-prompt opt-in to --force, only offered when settings.allowUnmountForce
   // is on. Reset every time the prompt opens or closes.
   unmountPromptForce: false,
+
+  // Stop-gateway confirm (standalone gateway-only rows -- see runStopGatewayOnly)
+  stopGatewayPromptFor: null as MountInstance | null,
 
   // Fork management: its own navigable place (ForkBrowserView), reached from
   // the profile editor via a "Forks" satellite button -- not embedded inline
@@ -1374,6 +1378,43 @@ export async function openBundle() {
   }
 }
 
+export function requestStopGatewayOnly(instance: MountInstance) {
+  state.stopGatewayPromptFor = instance
+}
+
+export function cancelStopGatewayPrompt() {
+  state.stopGatewayPromptFor = null
+}
+
+export async function confirmStopGatewayPrompt() {
+  const instance = state.stopGatewayPromptFor
+  if (!instance) return
+  state.stopGatewayPromptFor = null
+  await runStopGatewayOnly(instance)
+}
+
+async function runStopGatewayOnly(instance: MountInstance) {
+  if (instance.pid == null) {
+    notify('No process id known for this gateway -- cannot stop it', 'error')
+    return
+  }
+  state.busy = true
+  expectedGone.add(instance.key)
+  markUnmountInFlight()
+  try {
+    await stopGatewayOnly(instance.pid)
+    await refresh(false)
+    notify('Gateway stopped')
+  } catch (error) {
+    // Still running on any failure, so the row belongs back in the list
+    // rather than being hidden as on its way out.
+    expectedGone.delete(instance.key)
+    notify(error instanceof Error ? error.message : 'Failed to stop gateway', 'error')
+  } finally {
+    state.busy = false
+  }
+}
+
 export async function runUnmount(instance: MountInstance, force = false) {
   state.busy = true
   expectedGone.add(instance.key)
@@ -1494,6 +1535,16 @@ export async function copyConfig(key: string) {
   try {
     await navigator.clipboard.writeText(text)
     notify('Mount flags copied')
+  } catch (error) {
+    notify(error instanceof Error ? error.message : 'Copy failed', 'error')
+  }
+}
+
+export async function copyText(text: string, successMessage = 'Copied') {
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    notify(successMessage)
   } catch (error) {
     notify(error instanceof Error ? error.message : 'Copy failed', 'error')
   }

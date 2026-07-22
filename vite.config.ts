@@ -23,6 +23,9 @@ export default defineConfig({
     watch: {
       ignored: ['**/src-tauri/**'],
     },
+    hmr: {
+      overlay: false,
+    },
   },
   test: {
     environment: 'jsdom',

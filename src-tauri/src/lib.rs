@@ -139,6 +139,9 @@ struct MountInstance {
     // this before assuming any of those are populated.
     kind: Option<String>,
     gateway_endpoints: Option<Vec<GatewayEndpointInfo>>,
+    // Only meaningful for a "gateway" entry today -- stop_gateway_only is
+    // the one thing that needs it, to send a signal at a specific process.
+    pid: Option<u32>,
     // Not part of `mountos list --json` (confirmed: name/mountPath/fsName/
     // viewMode/backend/etc only) -- filled in afterward from each instance's
     // own .mountOS/.config, the same file get_instance_config reads.
@@ -1531,6 +1534,10 @@ fn parse_instances_value(value: &Value) -> Vec<MountInstance> {
                 orphaned,
                 kind: entry.get("kind").and_then(Value::as_str).map(ToString::to_string),
                 gateway_endpoints,
+                pid: entry
+                    .get("pid")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u32::try_from(value).ok()),
                 // All are filled in / corrected afterward in get_system_state
                 // -- listing alone can't know any of them.
                 mount_time: None,
@@ -2867,6 +2874,22 @@ fn stop_gateway_blocking(pid: u32) -> Result<(), DesktopError> {
             "no running mountos process at PID {pid} -- it may have already exited"
         )));
     }
+    let result = send_graceful_stop(pid);
+    known_gateway_pids()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .remove(&pid);
+    result
+}
+
+// SIGTERM (Unix) is the same signal mfuse's own signal.Notify handler reacts
+// to on Ctrl+C, so this drives the identical graceful-shutdown sequence
+// (detach mount, flush, drain) rather than an abrupt kill. Windows has no
+// equivalent graceful request for a console process without its own IPC
+// listener -- `taskkill /F` is what stop_gateway has always used here; kept
+// as-is rather than silently changing existing launched-by-this-app behavior
+// as a side effect of adding the gateway-only case below.
+fn send_graceful_stop(pid: u32) -> Result<(), DesktopError> {
     #[cfg(windows)]
     let status = Command::new("taskkill")
         .args(["/PID", &pid.to_string(), "/F"])
@@ -2875,10 +2898,6 @@ fn stop_gateway_blocking(pid: u32) -> Result<(), DesktopError> {
     let status = Command::new("kill")
         .args(["-TERM", &pid.to_string()])
         .status()?;
-    known_gateway_pids()
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .remove(&pid);
     if status.success() {
         Ok(())
     } else {
@@ -2886,6 +2905,52 @@ fn stop_gateway_blocking(pid: u32) -> Result<(), DesktopError> {
             "failed to stop gateway process {pid} (exit {status})"
         )))
     }
+}
+
+#[tauri::command]
+async fn stop_gateway_only(pid: u32) -> Result<(), DesktopError> {
+    tauri::async_runtime::spawn_blocking(move || stop_gateway_only_blocking(pid))
+        .await
+        .map_err(|error| DesktopError::Message(format!("stop gateway task failed: {error}")))?
+}
+
+// A standalone gateway-only row (mountos gateway / mount --gateway-only) has
+// no launch record in known_gateway_pids -- it was very likely started from
+// a terminal, not this app -- so there is nothing to check that trust chain
+// against. Instead this re-derives trust from mountos list --json itself,
+// the same "the renderer's claim about what to act on must be corroborated
+// by the CLI's own live listing" pattern list_contains_target/open_target
+// already use for mount targets: the pid must currently appear as a live
+// "gateway" kind entry before this sends it anything.
+fn stop_gateway_only_blocking(pid: u32) -> Result<(), DesktopError> {
+    let output = command_output(&["list", "--json"])?;
+    if !output.status.success() {
+        return Err(DesktopError::Message(format!(
+            "mountos list failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    let value = serde_json::from_slice::<Value>(&output.stdout)?;
+    let entries = value
+        .as_array()
+        .cloned()
+        .or_else(|| value.get("mounts").and_then(Value::as_array).cloned())
+        .unwrap_or_default();
+    let is_live_gateway = entries.iter().any(|entry| {
+        entry.get("kind").and_then(Value::as_str) == Some("gateway")
+            && entry.get("pid").and_then(Value::as_u64) == Some(u64::from(pid))
+    });
+    if !is_live_gateway {
+        return Err(DesktopError::Message(format!(
+            "PID {pid} is not a currently active gateway-only instance"
+        )));
+    }
+    if !pid_is_mountos_process(pid)? {
+        return Err(DesktopError::Message(format!(
+            "no running mountos process at PID {pid} -- it may have already exited"
+        )));
+    }
+    send_graceful_stop(pid)
 }
 
 #[cfg(windows)]
@@ -3879,6 +3944,7 @@ pub fn run() {
             open_version_view,
             open_gateway,
             stop_gateway,
+            stop_gateway_only,
             unmount_target,
             unmount_all_targets,
             open_target,
@@ -4148,6 +4214,7 @@ mod tests {
         assert_eq!(endpoints.len(), 1);
         assert_eq!(endpoints[0].protocol, "s3");
         assert_eq!(endpoints[0].url, "http://127.0.0.1:18280");
+        assert_eq!(instances[0].pid, Some(339));
     }
 
     #[test]

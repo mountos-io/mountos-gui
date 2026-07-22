@@ -24,7 +24,8 @@
   import { Skeleton } from '$lib/components/ui/skeleton'
   import GatewayLaunchesPanel from '$lib/components/GatewayLaunchesPanel.svelte'
   import InstanceConfigPanel from '$lib/components/InstanceConfigPanel.svelte'
-  import { backendBadgeStyle, formatMountedSince, formatUptime, gatewayProtocolsLabel, gatewayTargetLabel, healthTitle, healthTone, viewModeBadge, volumeKindBadgeStyle } from '$lib/health'
+  import InfoTip from '$lib/components/shared/InfoTip.svelte'
+  import { backendBadgeStyle, formatMountedSince, formatUptime, gatewayProtocolsLabel, healthTitle, healthTone, viewModeBadge, volumeKindBadgeStyle } from '$lib/health'
   import type { MountInstance } from '$lib/types'
   import {
     appState,
@@ -32,6 +33,7 @@
     canOpenViewsFor,
     cloneProfileFor,
     copyConfig,
+    copyText,
     computed,
     DEFAULT_POLL_SECONDS,
     gatewayInfoForInstance,
@@ -41,6 +43,7 @@
     requestUnmount,
     requestUnmountAll,
     requestVersionView,
+    requestStopGatewayOnly,
     runOpen,
     runOpenLostFound,
     saveAsProfile,
@@ -75,6 +78,13 @@
   function hasMoreActions(instance: MountInstance): boolean {
     return canOpen(instance) || canOpenViewsFor(instance) || Boolean(gatewayInfoForInstance(instance)?.pid)
   }
+
+  // `unmount --all` only ever acts on real kernel mounts -- a standalone
+  // gateway-only row has no unmount concept at all (see Stop gateway
+  // instead), so its presence alone must not enable this button.
+  function hasAnyMount(): boolean {
+    return appState.systemState.instances.some((instance) => instance.kind !== 'gateway')
+  }
 </script>
 
 <div class="corner-brackets relative border border-border/30 m-[22px] mb-0 p-4">
@@ -91,7 +101,7 @@
     </label>
     <div class="flex flex-wrap items-center gap-2">
       <Badge>{appState.systemState.instances.length} running</Badge>
-      <Button variant="destructive" disabled={appState.busy || appState.systemState.instances.length === 0} onclick={requestUnmountAll}>
+      <Button variant="destructive" disabled={appState.busy || !hasAnyMount()} onclick={requestUnmountAll}>
         <Unplug size={16} aria-hidden="true" />
         Unmount all
       </Button>
@@ -189,25 +199,45 @@
               </span>
             </Table.Cell>
             <Table.Cell>
-              {#if instance.kind === 'gateway'}
-                <code>{gatewayTargetLabel(instance.gatewayEndpoints)}</code>
-              {:else}
-                <code>{instance.mountPath}</code>
-                <!-- A mount that also runs a --gateway-attached embedded
-                     gateway (same process, folded onto this entry
-                     server-side by pid) gets its endpoints listed below the
-                     mount path, one per protocol -- badged so a reader
-                     doesn't have to guess which URL is s3 vs. hdfs. -->
-                {#if instance.gatewayEndpoints?.length}
-                  <div class="mt-1 flex flex-col gap-1">
-                    {#each instance.gatewayEndpoints as endpoint (endpoint.protocol)}
-                      <div class="flex items-center gap-2">
-                        <Badge variant="secondary" class="uppercase">{endpoint.protocol}</Badge>
-                        <code class="text-xs">{endpoint.url}</code>
-                      </div>
-                    {/each}
-                  </div>
-                {/if}
+              {#if instance.kind !== 'gateway'}
+                <div class="flex items-center gap-2">
+                  <code>{instance.mountPath}</code>
+                  <Button variant="ghost" size="icon" title="Copy target" aria-label="Copy target" onclick={() => copyText(instance.mountPath, 'Target copied')}>
+                    <Copy size={14} aria-hidden="true" />
+                  </Button>
+                </div>
+              {/if}
+              <!-- A "gateway" row has only endpoints; a "mount" row that also
+                   runs a --gateway-attached embedded gateway (same process,
+                   folded onto this entry server-side by pid) lists them below
+                   the mount path -- badged per protocol so a reader doesn't
+                   have to guess which URL is s3 vs. hdfs. S3's bucket name IS
+                   the fork ("auto" also works) -- HDFS has no such concept
+                   (always resolves to the bound fork), hence the hint on s3
+                   only. -->
+              {#if instance.gatewayEndpoints?.length}
+                <div class={instance.kind === 'gateway' ? 'flex flex-col gap-1' : 'mt-1 flex flex-col gap-1'}>
+                  {#each instance.gatewayEndpoints as endpoint (endpoint.protocol)}
+                    <div class="flex items-center gap-2">
+                      <Badge variant="secondary" class="uppercase">{endpoint.protocol}</Badge>
+                      <code class="text-xs">{endpoint.url}</code>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        title="Copy {endpoint.protocol} URL"
+                        aria-label="Copy {endpoint.protocol} URL"
+                        onclick={() => copyText(endpoint.url, `${endpoint.protocol.toUpperCase()} URL copied`)}
+                      >
+                        <Copy size={14} aria-hidden="true" />
+                      </Button>
+                      {#if endpoint.protocol === 's3'}
+                        <InfoTip
+                          text="This gateway serves one bucket: use **auto**, or the fork's own name (e.g. 'main'). Any other bucket name is rejected."
+                        />
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
               {/if}
             </Table.Cell>
             <Table.Cell>
@@ -222,16 +252,22 @@
                 <Button variant="outline" size="icon" title="Open folder" aria-label="Open folder" disabled={appState.busy || !canOpen(instance)} onclick={() => runOpen(instance)}>
                   <FolderOpen size={16} aria-hidden="true" />
                 </Button>
-                <Button
-                  variant="destructive"
-                  size="icon"
-                  title={instance.kind === 'gateway' ? "Can't stop a gateway this app didn't launch" : 'Unmount'}
-                  aria-label="Unmount"
-                  disabled={appState.busy || instance.kind === 'gateway'}
-                  onclick={() => requestUnmount(instance)}
-                >
-                  <Unplug size={16} aria-hidden="true" />
-                </Button>
+                {#if instance.kind === 'gateway'}
+                  <Button
+                    variant="destructive"
+                    size="icon"
+                    title="Stop gateway"
+                    aria-label="Stop gateway"
+                    disabled={appState.busy || instance.pid == null}
+                    onclick={() => requestStopGatewayOnly(instance)}
+                  >
+                    <OctagonX size={16} aria-hidden="true" />
+                  </Button>
+                {:else}
+                  <Button variant="destructive" size="icon" title="Unmount" aria-label="Unmount" disabled={appState.busy} onclick={() => requestUnmount(instance)}>
+                    <Unplug size={16} aria-hidden="true" />
+                  </Button>
+                {/if}
                 {#if hasMoreActions(instance)}
                 <DropdownMenu.Root>
                   <DropdownMenu.Trigger>
