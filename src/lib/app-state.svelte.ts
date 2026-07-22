@@ -1532,12 +1532,7 @@ export async function toggleInstanceConfig(instance: MountInstance) {
 export async function copyConfig(key: string) {
   const text = state.expandedConfig[key]
   if (!text) return
-  try {
-    await navigator.clipboard.writeText(text)
-    notify('Mount flags copied')
-  } catch (error) {
-    notify(error instanceof Error ? error.message : 'Copy failed', 'error')
-  }
+  await copyText(text, 'Mount flags copied')
 }
 
 export async function copyText(text: string, successMessage = 'Copied') {

@@ -45,6 +45,18 @@ export function gatewayProtocolsLabel(endpoints?: GatewayEndpointInfo[]): string
   return endpoints.map((endpoint) => endpoint.protocol).join(', ')
 }
 
+/**
+ * Single-line target summary for a gateway-only instance, for compact
+ * contexts (the tray popover) that have no room for InstancesView's
+ * per-protocol badged rows. A single endpoint (the common case) shows just
+ * the bare URL; multiple protocols are labeled so they aren't ambiguous.
+ */
+export function gatewayTargetSummary(endpoints?: GatewayEndpointInfo[]): string {
+  if (!endpoints || endpoints.length === 0) return ''
+  if (endpoints.length === 1) return endpoints[0].url
+  return endpoints.map((endpoint) => `${endpoint.protocol}: ${endpoint.url}`).join(', ')
+}
+
 // 'auto' isn't a real backend identity (it means "let the CLI decide"), so it
 // stays neutral rather than claiming one of these categorical colors.
 const BACKEND_PASTEL: Partial<Record<Backend, string>> = {

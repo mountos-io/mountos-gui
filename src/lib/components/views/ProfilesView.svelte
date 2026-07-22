@@ -209,7 +209,12 @@
           {/if}
         </div>
         <div class="grid gap-1.5">
-          <Label for="profile-volume">Volume name</Label>
+          <span class="inline-flex items-center gap-1">
+            <Label for="profile-volume">Volume name</Label>
+            {#if selectedProfile.backend === 'fskit'}
+              <InfoTip text="Used as the mount point's folder name under {FSKIT_MOUNT_PREFIX}" />
+            {/if}
+          </span>
           <Input
             id="profile-volume"
             value={selectedProfile.volume}
@@ -218,8 +223,6 @@
           />
           {#if computed.volumeNameError}
             <small class="text-destructive text-sm">{computed.volumeNameError}</small>
-          {:else if selectedProfile.backend === 'fskit'}
-            <small class="text-muted-foreground text-sm">Used as the mount point's folder name under {FSKIT_MOUNT_PREFIX}</small>
           {/if}
         </div>
         <div class="grid gap-1.5">

@@ -116,8 +116,8 @@
       </div>
     </div>
     <div class="flex items-center justify-between gap-4">
-      <span class="inline-flex items-center gap-1"><strong>Grayscale</strong><InfoTip text="Reduces color for low-light comfort." /></span>
-      <Checkbox checked={themeState.grayscale} onchange={(e) => setGrayscale(e.currentTarget.checked)} />
+      <span class="inline-flex items-center gap-1"><strong id="settings-grayscale-label">Grayscale</strong><InfoTip text="Reduces color for low-light comfort." /></span>
+      <Checkbox checked={themeState.grayscale} onchange={(e) => setGrayscale(e.currentTarget.checked)} aria-labelledby="settings-grayscale-label" />
     </div>
     <div class="grid gap-1.5">
       <div class="flex items-center justify-between gap-4">
@@ -181,22 +181,34 @@
     <span class="mono-label">Actions</span>
     <div class="flex items-center justify-between gap-4">
       <span class="inline-flex items-center gap-1">
-        <strong>Skip unmount confirmation</strong>
+        <strong id="settings-skip-unmount-confirm-label">Skip unmount confirmation</strong>
         <InfoTip text="Skips the confirmation dialog on Unmount and Unmount all." />
         <Badge variant="warning"><AlertTriangle size={12} aria-hidden="true" />Not recommended</Badge>
       </span>
-      <Checkbox checked={appState.skipUnmountConfirm} onchange={(e) => setSkipUnmountConfirm(e.currentTarget.checked)} />
+      <Checkbox
+        checked={appState.skipUnmountConfirm}
+        onchange={(e) => setSkipUnmountConfirm(e.currentTarget.checked)}
+        aria-labelledby="settings-skip-unmount-confirm-label"
+      />
     </div>
     <div class="flex items-center justify-between gap-4">
-      <span class="inline-flex items-center gap-1"><strong>Allow force fork delete</strong><InfoTip text="Adds --force to fork delete, removing the whole subtree from the shared volume." /></span>
-      <Checkbox checked={appState.settings.allowForkForceDelete} onchange={(e) => changeAllowForkForceDelete(e.currentTarget.checked)} />
+      <span class="inline-flex items-center gap-1"><strong id="settings-allow-force-fork-delete-label">Allow force fork delete</strong><InfoTip text="Adds --force to fork delete, removing the whole subtree from the shared volume." /></span>
+      <Checkbox
+        checked={appState.settings.allowForkForceDelete}
+        onchange={(e) => changeAllowForkForceDelete(e.currentTarget.checked)}
+        aria-labelledby="settings-allow-force-fork-delete-label"
+      />
     </div>
     {#if appState.settings.allowForkForceDelete}
       <Callout>--force fork delete acts on the shared volume, not just this profile, and also removes the fork's entire subtree. Deleting a fork is recoverable only within its grace period.</Callout>
     {/if}
     <div class="flex items-center justify-between gap-4">
-      <span class="inline-flex items-center gap-1"><strong>Allow force unmount</strong><InfoTip text="Adds a Force option to the unmount prompt, for unmounting a mount an app or terminal is still using." /></span>
-      <Checkbox checked={appState.settings.allowUnmountForce} onchange={(e) => changeAllowUnmountForce(e.currentTarget.checked)} />
+      <span class="inline-flex items-center gap-1"><strong id="settings-allow-force-unmount-label">Allow force unmount</strong><InfoTip text="Adds a Force option to the unmount prompt, for unmounting a mount an app or terminal is still using." /></span>
+      <Checkbox
+        checked={appState.settings.allowUnmountForce}
+        onchange={(e) => changeAllowUnmountForce(e.currentTarget.checked)}
+        aria-labelledby="settings-allow-force-unmount-label"
+      />
     </div>
     {#if appState.settings.allowUnmountForce}
       <Callout>Forcing disconnects whatever is still using the mount. Apps reading or writing files there will get an error and lose unsaved work. Without it, a mount that is in use stays mounted and keeps working.</Callout>

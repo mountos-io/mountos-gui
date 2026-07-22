@@ -13,7 +13,7 @@
   }
 
   function formatPrimitive(value: unknown): string {
-    if (value === null || value === undefined || value === '') return '—'
+    if (value === null || value === undefined || value === '') return 'N/A'
     return String(value)
   }
 

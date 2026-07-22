@@ -175,15 +175,15 @@
                   <Badge variant="secondary">Read only</Badge>
                 {/if}
                 {#if volumeKindFor(instance)}
-                  <Badge variant="secondary" style={volumeKindBadgeStyle(volumeKindFor(instance))} title="Volume kind, detected from the mount itself">
+                  <Badge variant="secondary" style={volumeKindBadgeStyle(volumeKindFor(instance))} title="Volume kind, detected from the mount itself" tabindex={0}>
                     {volumeKindFor(instance) === 'iceberg' ? 'Iceberg' : 'General'}
                   </Badge>
                 {/if}
                 {#if isTemporaryFork(instance)}
-                  <Badge variant="warning" title="This mount is on a temporary fork, cleaned up when it's deleted">Temp fork</Badge>
+                  <Badge variant="warning" title="This mount is on a temporary fork, cleaned up when it's deleted" tabindex={0}>Temp fork</Badge>
                 {/if}
                 {#if gatewayInfoForInstance(instance)}
-                  <Badge title="This mount also has an S3/HDFS gateway running, launched from this app">Gateway</Badge>
+                  <Badge title="This mount also has an S3/HDFS gateway running, launched from this app" tabindex={0}>Gateway</Badge>
                 {/if}
                 {#if (appState.settings.pollSeconds ?? DEFAULT_POLL_SECONDS) === 0}
                   <!-- Polling off: nothing re-renders this row again until a manual
@@ -191,10 +191,10 @@
                        read as live when it isn't. An absolute time stays correct
                        regardless of how long it sits unrefreshed. -->
                   {#if formatMountedSince(instance.mountTime)}
-                    <Badge variant="secondary" title="Auto-refresh is off -- hit Refresh to update">Since {formatMountedSince(instance.mountTime)}</Badge>
+                    <Badge variant="secondary" title="Auto-refresh is off -- hit Refresh to update" tabindex={0}>Since {formatMountedSince(instance.mountTime)}</Badge>
                   {/if}
                 {:else if formatUptime(instance.mountTime)}
-                  <Badge variant="secondary" title={`Mounted at ${formatMountedSince(instance.mountTime)}`}>Up {formatUptime(instance.mountTime)}</Badge>
+                  <Badge variant="secondary" title={`Mounted at ${formatMountedSince(instance.mountTime)}`} tabindex={0}>Up {formatUptime(instance.mountTime)}</Badge>
                 {/if}
               </span>
             </Table.Cell>
@@ -203,7 +203,7 @@
                 <div class="flex items-center gap-2">
                   <code>{instance.mountPath}</code>
                   <Button variant="ghost" size="icon" title="Copy target" aria-label="Copy target" onclick={() => copyText(instance.mountPath, 'Target copied')}>
-                    <Copy size={14} aria-hidden="true" />
+                    <Copy size={16} aria-hidden="true" />
                   </Button>
                 </div>
               {/if}
@@ -228,7 +228,7 @@
                         aria-label="Copy {endpoint.protocol} URL"
                         onclick={() => copyText(endpoint.url, `${endpoint.protocol.toUpperCase()} URL copied`)}
                       >
-                        <Copy size={14} aria-hidden="true" />
+                        <Copy size={16} aria-hidden="true" />
                       </Button>
                       {#if endpoint.protocol === 's3'}
                         <InfoTip

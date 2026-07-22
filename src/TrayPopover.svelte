@@ -1,10 +1,10 @@
 <script lang="ts">
   import { getCurrentWindow } from '@tauri-apps/api/window'
-  import { FolderOpen, Maximize2, Unplug } from '@lucide/svelte'
+  import { FolderOpen, Maximize2, OctagonX, Unplug } from '@lucide/svelte'
   import { Button } from './lib/components/ui/button'
   import { isAbsolutePath } from './lib/cli'
-  import { healthTone } from './lib/health'
-  import { getSystemState, openTarget, showMainWindow, unmountTarget } from './lib/tauri'
+  import { gatewayTargetSummary, healthTone } from './lib/health'
+  import { getSystemState, openTarget, showMainWindow, stopGatewayOnly, unmountTarget } from './lib/tauri'
   import { initThemeSync } from './lib/theme.svelte'
   import type { MountInstance, SystemState } from './lib/types'
 
@@ -61,6 +61,19 @@
     }
   }
 
+  async function runStopGateway(instance: MountInstance) {
+    if (instance.pid == null) return
+    busy = true
+    try {
+      await stopGatewayOnly(instance.pid)
+      await refresh()
+    } catch {
+      // Quick-glance surface; detailed errors are reported in the main window.
+    } finally {
+      busy = false
+    }
+  }
+
   $effect(() => {
     void refresh()
     const onFocus = () => void refresh()
@@ -101,15 +114,31 @@
           <span class="led {healthTone(instance.health)}" title={instance.health} aria-hidden="true"></span>
           <div class="grid min-w-0 flex-1 gap-0.5">
             <strong class="truncate text-sm">{instance.name || instance.volumeId || 'mountOS volume'} <span class="sr-only">({instance.health})</span></strong>
-            <span class="mono-label truncate normal-case tracking-normal">{instance.mountPath}</span>
+            <span class="mono-label truncate normal-case tracking-normal">
+              {instance.kind === 'gateway' ? gatewayTargetSummary(instance.gatewayEndpoints) : instance.mountPath}
+            </span>
           </div>
           <div class="flex shrink-0 gap-1">
             <Button variant="outline" size="icon" class="h-7 w-7" title="Open folder" aria-label="Open folder" disabled={busy || !canOpen(instance)} onclick={() => runOpen(instance)}>
               <FolderOpen size={13} aria-hidden="true" />
             </Button>
-            <Button variant="destructive" size="icon" class="h-7 w-7" title="Unmount" aria-label="Unmount" disabled={busy} onclick={() => runUnmount(instance)}>
-              <Unplug size={13} aria-hidden="true" />
-            </Button>
+            {#if instance.kind === 'gateway'}
+              <Button
+                variant="destructive"
+                size="icon"
+                class="h-7 w-7"
+                title="Stop gateway"
+                aria-label="Stop gateway"
+                disabled={busy || instance.pid == null}
+                onclick={() => runStopGateway(instance)}
+              >
+                <OctagonX size={13} aria-hidden="true" />
+              </Button>
+            {:else}
+              <Button variant="destructive" size="icon" class="h-7 w-7" title="Unmount" aria-label="Unmount" disabled={busy} onclick={() => runUnmount(instance)}>
+                <Unplug size={13} aria-hidden="true" />
+              </Button>
+            {/if}
           </div>
         </div>
       {/each}
