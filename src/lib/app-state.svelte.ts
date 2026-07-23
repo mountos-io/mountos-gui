@@ -101,6 +101,12 @@ export const DEFAULT_POLL_SECONDS = 10
 export const HIDDEN_POLL_MS = 30_000
 export const POLL_CHOICES = [0, 2, 5, 10, 30, 60]
 
+// Starting point offered when a user turns off Auto disk-cache sizing --
+// not a hidden default (Auto, i.e. no --disk-cache-size at all, leaving the
+// CLI's own free-disk-scaled [10G, 100G] clamp in charge, is the real
+// default and what ships unset).
+export const AGGRESSIVE_CACHE_SIZE = '100G'
+
 // Matches the old banner's auto-dismiss window.
 const NOTICE_AUTO_DISMISS_MS = 6000
 
@@ -2019,6 +2025,14 @@ export async function changeDefaultCacheSize(cacheSize: string) {
   } catch (error) {
     notify(error instanceof Error ? error.message : 'Failed to save settings', 'error')
   }
+}
+
+// Auto is the absence of an override (undefined defaultCacheSize), not a
+// separate persisted flag -- turning it back on just clears the field.
+// Turning it off seeds AGGRESSIVE_CACHE_SIZE rather than leaving the field
+// blank, so the UI never shows "Auto off" next to an empty value.
+export async function toggleDefaultCacheSizeAuto(auto: boolean) {
+  await changeDefaultCacheSize(auto ? '' : state.settings.defaultCacheSize || AGGRESSIVE_CACHE_SIZE)
 }
 
 export async function changeCliPathOverride(path: string) {

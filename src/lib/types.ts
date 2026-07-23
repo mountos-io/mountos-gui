@@ -129,9 +129,9 @@ export interface DesktopSettings {
   // Seeds new profiles' cacheDir. Undefined means no override (the CLI's
   // own ~/.mountOS/cache default applies).
   defaultCacheDir?: string
-  // Seeds new profiles' cacheSize (--disk-cache-size). Ships as "100G" on a
-  // fresh install so new profiles get a fixed cache ceiling instead of the
-  // CLI's own freeDisk/10 auto-scaling.
+  // Seeds new profiles' cacheSize (--disk-cache-size). Undefined means Auto:
+  // no flag emitted, so the CLI's own free-disk-scaled [10G, 100G] clamp
+  // applies. The Settings UI offers a fixed override via an Auto checkbox.
   defaultCacheSize?: string
   // Pins an exact mountos binary instead of the first PATH match. Once
   // set, a moved/missing pinned binary is a hard error rather than a

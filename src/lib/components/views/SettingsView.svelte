@@ -37,6 +37,7 @@
     refresh,
     setSkipUnmountConfirm,
     showLicenses,
+    toggleDefaultCacheSizeAuto,
     uninstallMcp,
   } from '$lib/app-state.svelte'
 
@@ -71,6 +72,8 @@
   // the OS appearance flips while this view is open.
   const skinPresets = $derived(presetsForMode(themeState.resolvedMode))
   const defaultSkinName = $derived(defaultSkin(themeState.resolvedMode))
+
+  const cacheSizeAuto = $derived(!appState.settings.defaultCacheSize)
 </script>
 
 <section class="corner-brackets surface m-[22px] p-4 grid gap-5 outline-hidden" tabindex="-1" use:focusOnMount>
@@ -193,15 +196,22 @@
       </div>
     </div>
     <div class="flex items-center justify-between gap-4">
-      <span class="inline-flex items-center gap-1"><strong id="settings-default-cache-size-label">Default disk cache size</strong><InfoTip text="Seeds new profiles only. Accepts MiB/GiB/TiB, e.g. 100G. Overrides the CLI's own free-disk-based auto sizing, which can land well under this on a nearly-full disk." /></span>
-      <Input
-        type="text"
-        placeholder="100G"
-        value={appState.settings.defaultCacheSize ?? ''}
-        onchange={(e) => changeDefaultCacheSize(e.currentTarget.value)}
-        aria-labelledby="settings-default-cache-size-label"
-        class="w-48"
-      />
+      <span class="inline-flex items-center gap-1"><strong id="settings-default-cache-size-label">Default disk cache size</strong><InfoTip text="Seeds new profiles only. Accepts MiB/GiB/TiB, e.g. 100G." /></span>
+      <div class="flex items-center gap-3">
+        <span class="inline-flex items-center gap-1">
+          <Checkbox checked={cacheSizeAuto} onchange={(e) => toggleDefaultCacheSizeAuto(e.currentTarget.checked)} label="Auto" />
+          <InfoTip text="Adjusted between 10-100GB based on free disk." />
+        </span>
+        <Input
+          type="text"
+          placeholder="100G"
+          value={appState.settings.defaultCacheSize ?? ''}
+          onchange={(e) => changeDefaultCacheSize(e.currentTarget.value)}
+          disabled={cacheSizeAuto}
+          aria-labelledby="settings-default-cache-size-label"
+          class="w-24"
+        />
+      </div>
     </div>
   </div>
 

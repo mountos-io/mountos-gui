@@ -269,10 +269,9 @@ struct DesktopSettings {
     // independently afterward (or be hand-edited to clear it back to the
     // CLI's own ~/.mountOS/cache default). None means no override.
     default_cache_dir: Option<String>,
-    // Seeds new profiles' cacheSize (--disk-cache-size). Ships non-empty
-    // ("100G") so a fresh install gets a fixed cache ceiling instead of the
-    // CLI's own freeDisk/10 auto-scaling, which can land well under 100G on
-    // a nearly-full disk.
+    // Seeds new profiles' cacheSize (--disk-cache-size). None means Auto:
+    // no flag emitted, so the CLI's own free-disk-scaled [10G, 100G] clamp
+    // applies. The Settings UI offers a fixed override via an Auto checkbox.
     default_cache_size: Option<String>,
     // Pins an exact mountos binary instead of the first PATH match. Once
     // set, a moved/missing pinned binary is a hard error (see
@@ -301,7 +300,7 @@ impl Default for DesktopSettings {
             default_backend: Backend::Auto,
             default_discovery_url: None,
             default_cache_dir: None,
-            default_cache_size: Some("100G".to_string()),
+            default_cache_size: None,
             cli_path_override: None,
             poll_seconds: None,
             terminal: None,
