@@ -26,6 +26,7 @@ export interface MountProfile {
   secretRef: SecretRef
   backend: Backend
   cacheDir?: string
+  cacheSize?: string
   readOnly: boolean
   autoRemount: boolean
   temporaryFork: boolean
@@ -125,6 +126,13 @@ export interface DesktopSettings {
   // independently afterward. Existing profiles are never retroactively
   // rewritten when this changes.
   defaultDiscoveryUrl?: string
+  // Seeds new profiles' cacheDir. Undefined means no override (the CLI's
+  // own ~/.mountOS/cache default applies).
+  defaultCacheDir?: string
+  // Seeds new profiles' cacheSize (--disk-cache-size). Ships as "100G" on a
+  // fresh install so new profiles get a fixed cache ceiling instead of the
+  // CLI's own freeDisk/10 auto-scaling.
+  defaultCacheSize?: string
   // Pins an exact mountos binary instead of the first PATH match. Once
   // set, a moved/missing pinned binary is a hard error rather than a
   // silent fallback to a different install.

@@ -643,6 +643,8 @@ export function newProfile(preset: Partial<MountProfile> = {}) {
     accessKeyId: '',
     secretRef: 'prompt',
     backend: backends.includes(state.settings.defaultBackend) ? state.settings.defaultBackend : 'auto',
+    cacheDir: state.settings.defaultCacheDir || undefined,
+    cacheSize: state.settings.defaultCacheSize || undefined,
     readOnly: false,
     autoRemount: false,
     temporaryFork: false,
@@ -1989,6 +1991,31 @@ export async function changeDefaultDiscoveryUrl(discoveryUrl: string) {
   try {
     state.settings = await saveSettings({ ...state.settings, defaultDiscoveryUrl: trimmed || undefined })
     notify(trimmed ? 'New profiles default to this discovery URL' : 'Default discovery URL cleared')
+  } catch (error) {
+    notify(error instanceof Error ? error.message : 'Failed to save settings', 'error')
+  }
+}
+
+export async function changeDefaultCacheDir(cacheDir: string) {
+  const trimmed = cacheDir.trim()
+  try {
+    state.settings = await saveSettings({ ...state.settings, defaultCacheDir: trimmed || undefined })
+    notify(trimmed ? 'New profiles default to this cache directory' : 'Default cache directory cleared')
+  } catch (error) {
+    notify(error instanceof Error ? error.message : 'Failed to save settings', 'error')
+  }
+}
+
+export async function browseDefaultCacheDir() {
+  const chosen = await browseFolder('Choose default disk cache directory', state.settings.defaultCacheDir)
+  if (chosen) await changeDefaultCacheDir(chosen)
+}
+
+export async function changeDefaultCacheSize(cacheSize: string) {
+  const trimmed = cacheSize.trim()
+  try {
+    state.settings = await saveSettings({ ...state.settings, defaultCacheSize: trimmed || undefined })
+    notify(trimmed ? `New profiles default to a ${trimmed} disk cache` : 'Default cache size cleared')
   } catch (error) {
     notify(error instanceof Error ? error.message : 'Failed to save settings', 'error')
   }

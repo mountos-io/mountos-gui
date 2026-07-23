@@ -90,6 +90,7 @@ struct MountProfile {
     secret_ref: String,
     backend: Backend,
     cache_dir: Option<String>,
+    cache_size: Option<String>,
     read_only: bool,
     auto_remount: bool,
     // Added after the original schema; #[serde(default)] so profiles saved
@@ -264,6 +265,15 @@ struct DesktopSettings {
     // rewritten when this changes. Option<T> deserializes missing older
     // settings.json files (pre-dating this field) as None automatically.
     default_discovery_url: Option<String>,
+    // Seeds new profiles' cacheDir; each profile can still override it
+    // independently afterward (or be hand-edited to clear it back to the
+    // CLI's own ~/.mountOS/cache default). None means no override.
+    default_cache_dir: Option<String>,
+    // Seeds new profiles' cacheSize (--disk-cache-size). Ships non-empty
+    // ("100G") so a fresh install gets a fixed cache ceiling instead of the
+    // CLI's own freeDisk/10 auto-scaling, which can land well under 100G on
+    // a nearly-full disk.
+    default_cache_size: Option<String>,
     // Pins an exact mountos binary instead of the first PATH match. Once
     // set, a moved/missing pinned binary is a hard error (see
     // mountos_path) rather than a silent fallback to a different install.
@@ -290,6 +300,8 @@ impl Default for DesktopSettings {
         Self {
             default_backend: Backend::Auto,
             default_discovery_url: None,
+            default_cache_dir: None,
+            default_cache_size: Some("100G".to_string()),
             cli_path_override: None,
             poll_seconds: None,
             terminal: None,
@@ -526,6 +538,7 @@ fn managed_flags() -> HashSet<&'static str> {
         "read-only",
         "r",
         "disk-cache-dir",
+        "disk-cache-size",
         "backend",
         "macfuse",
         "fskit",
@@ -676,6 +689,11 @@ fn push_cache_and_extra_args(argv: &mut Vec<String>, profile: &MountProfile) {
     if let Some(cache_dir) = &profile.cache_dir {
         if !cache_dir.is_empty() {
             argv.extend(["--disk-cache-dir".to_string(), cache_dir.clone()]);
+        }
+    }
+    if let Some(cache_size) = &profile.cache_size {
+        if !cache_size.is_empty() {
+            argv.extend(["--disk-cache-size".to_string(), cache_size.clone()]);
         }
     }
     argv.extend(profile.extra_args.clone());
@@ -2623,6 +2641,7 @@ fn live_mount_config_to_profile(mount_path: &str, backend: Backend, config: Live
         secret_ref: "prompt".to_string(),
         backend,
         cache_dir: None,
+        cache_size: None,
         read_only: false,
         auto_remount: false,
         temporary_fork: false,
@@ -4207,11 +4226,12 @@ mod tests {
             secret_ref: "prompt".to_string(),
             backend: Backend::Nfs,
             cache_dir: Some("/tmp/mountos cache".to_string()),
+            cache_size: Some("10G".to_string()),
             read_only: true,
             auto_remount: false,
             temporary_fork: false,
             trusted_discovery_host: None,
-            extra_args: vec!["--disk-cache-size".to_string(), "10G".to_string()],
+            extra_args: vec!["--attr-cache".to_string(), "2.0".to_string()],
             created_at: "2026-07-10T00:00:00Z".to_string(),
             updated_at: "2026-07-10T00:00:00Z".to_string(),
             volume_kind: None,
@@ -4228,6 +4248,9 @@ mod tests {
         assert!(argv
             .windows(2)
             .any(|args| args == ["--disk-cache-dir", "/tmp/mountos cache"]));
+        assert!(argv
+            .windows(2)
+            .any(|args| args == ["--disk-cache-size", "10G"]));
         assert!(argv.contains(&"--nfs".to_string()));
         assert!(argv.contains(&"-s".to_string()));
         assert!(!argv.contains(&"--volume".to_string()));
@@ -4339,8 +4362,8 @@ mod tests {
     #[test]
     fn validates_extra_arg_values_without_treating_them_as_positionals() {
         assert!(validate_extra_args(&[
-            "--disk-cache-size".to_string(),
-            "10G".to_string(),
+            "--attr-cache".to_string(),
+            "2.0".to_string(),
             "--debug".to_string(),
         ])
         .is_empty());
@@ -4354,6 +4377,12 @@ mod tests {
         assert_eq!(
             validate_extra_args(&["--destination".to_string(), "/tmp/other".to_string()]),
             vec!["--destination".to_string(), "/tmp/other".to_string()]
+        );
+        // --disk-cache-size now has its own MountProfile field; extra_args is
+        // no longer a legal way to set it.
+        assert_eq!(
+            validate_extra_args(&["--disk-cache-size".to_string(), "10G".to_string()]),
+            vec!["--disk-cache-size".to_string(), "10G".to_string()]
         );
     }
 
@@ -4622,6 +4651,7 @@ mod tests {
         assert_eq!(profile.secret_ref, "prompt");
         assert!(profile.extra_args.is_empty());
         assert!(profile.cache_dir.is_none());
+        assert!(profile.cache_size.is_none());
     }
 
     #[test]
@@ -4765,8 +4795,8 @@ mod tests {
 
     #[test]
     fn satellite_and_gateway_only_argv_include_cache_dir_and_extra_args() {
-        // profile() carries cache_dir "/tmp/mountos cache" and extra_args
-        // ["--disk-cache-size", "10G"] -- the server resolves these
+        // profile() carries cache_dir "/tmp/mountos cache", cache_size "10G",
+        // and extra_args ["--attr-cache", "2.0"] -- the server resolves these
         // unconditionally regardless of subcommand, so every builder besides
         // the mount+gateway combo (which already goes through
         // build_mount_argv) must emit them too.
@@ -4782,8 +4812,11 @@ mod tests {
                 "missing --disk-cache-dir in {argv:?}"
             );
             assert!(
-                argv.windows(2)
-                    .any(|pair| pair == ["--disk-cache-size", "10G"]),
+                argv.windows(2).any(|pair| pair == ["--disk-cache-size", "10G"]),
+                "missing --disk-cache-size in {argv:?}"
+            );
+            assert!(
+                argv.windows(2).any(|pair| pair == ["--attr-cache", "2.0"]),
                 "missing extra_args in {argv:?}"
             );
         }

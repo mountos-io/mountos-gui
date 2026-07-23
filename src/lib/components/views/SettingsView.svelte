@@ -17,10 +17,13 @@
   import type { Backend } from '$lib/types'
   import {
     appState,
+    browseDefaultCacheDir,
     changeAllowForkForceDelete,
     changeAllowUnmountForce,
     changeCliPathOverride,
     changeDefaultBackend,
+    changeDefaultCacheDir,
+    changeDefaultCacheSize,
     changeDefaultDiscoveryUrl,
     changePollSeconds,
     changeTerminal,
@@ -153,12 +156,52 @@
   <div class="grid gap-3">
     <span class="mono-label">Mounting defaults</span>
     <div class="flex items-center justify-between gap-4">
-      <span class="inline-flex items-center gap-1"><strong>Default backend</strong><InfoTip text="Used for new profiles; Auto follows the CLI's platform order." /></span>
-      <Select options={backendOptions} value={appState.settings.defaultBackend} onchange={(value) => changeDefaultBackend(value as Backend)} class="w-48" />
+      <span class="inline-flex items-center gap-1"><strong id="settings-default-backend-label">Default backend</strong><InfoTip text="Used for new profiles; Auto follows the CLI's platform order." /></span>
+      <Select
+        options={backendOptions}
+        value={appState.settings.defaultBackend}
+        onchange={(value) => changeDefaultBackend(value as Backend)}
+        ariaLabelledby="settings-default-backend-label"
+        class="w-48"
+      />
     </div>
     <div class="grid gap-1.5">
-      <span class="inline-flex items-center gap-1"><strong>Default discovery URL</strong><InfoTip text="Seeds new profiles only; existing ones stay unchanged." /></span>
-      <Input type="text" placeholder="https://hub.example.com" value={appState.settings.defaultDiscoveryUrl ?? ''} onchange={(e) => changeDefaultDiscoveryUrl(e.currentTarget.value)} />
+      <span class="inline-flex items-center gap-1"><strong id="settings-default-discovery-url-label">Default discovery URL</strong><InfoTip text="Seeds new profiles only; existing ones stay unchanged." /></span>
+      <Input
+        type="text"
+        placeholder="https://hub.example.com"
+        value={appState.settings.defaultDiscoveryUrl ?? ''}
+        onchange={(e) => changeDefaultDiscoveryUrl(e.currentTarget.value)}
+        aria-labelledby="settings-default-discovery-url-label"
+      />
+    </div>
+    <div class="grid gap-1.5">
+      <span class="inline-flex items-center gap-1"><strong id="settings-default-cache-dir-label">Default disk cache directory</strong><InfoTip text="Seeds new profiles only. Blank uses the CLI's own ~/.mountOS/cache. Shared across every volume and fork is safe -- mountos already isolates each one under its own subfolder." /></span>
+      <div class="flex gap-2">
+        <Input
+          type="text"
+          placeholder="~/.mountOS/cache"
+          value={appState.settings.defaultCacheDir ?? ''}
+          onchange={(e) => changeDefaultCacheDir(e.currentTarget.value)}
+          aria-labelledby="settings-default-cache-dir-label"
+          class="flex-1"
+        />
+        <Button type="button" onclick={browseDefaultCacheDir} title="Choose a folder" class="shrink-0">
+          <FolderOpen size={16} aria-hidden="true" />
+          Browse
+        </Button>
+      </div>
+    </div>
+    <div class="flex items-center justify-between gap-4">
+      <span class="inline-flex items-center gap-1"><strong id="settings-default-cache-size-label">Default disk cache size</strong><InfoTip text="Seeds new profiles only. Accepts MiB/GiB/TiB, e.g. 100G. Overrides the CLI's own free-disk-based auto sizing, which can land well under this on a nearly-full disk." /></span>
+      <Input
+        type="text"
+        placeholder="100G"
+        value={appState.settings.defaultCacheSize ?? ''}
+        onchange={(e) => changeDefaultCacheSize(e.currentTarget.value)}
+        aria-labelledby="settings-default-cache-size-label"
+        class="w-48"
+      />
     </div>
   </div>
 
@@ -167,12 +210,24 @@
   <div class="grid gap-3">
     <span class="mono-label">Monitoring &amp; dashboard</span>
     <div class="flex items-center justify-between gap-4">
-      <span class="inline-flex items-center gap-1"><strong>Refresh interval</strong><InfoTip text="How often mounts refresh. Off disables auto-refresh; use the Refresh button instead." /></span>
-      <Select options={pollOptions} value={String(appState.settings.pollSeconds ?? DEFAULT_POLL_SECONDS)} onchange={(value) => changePollSeconds(Number(value))} class="w-48" />
+      <span class="inline-flex items-center gap-1"><strong id="settings-refresh-interval-label">Refresh interval</strong><InfoTip text="How often mounts refresh. Off disables auto-refresh; use the Refresh button instead." /></span>
+      <Select
+        options={pollOptions}
+        value={String(appState.settings.pollSeconds ?? DEFAULT_POLL_SECONDS)}
+        onchange={(value) => changePollSeconds(Number(value))}
+        ariaLabelledby="settings-refresh-interval-label"
+        class="w-48"
+      />
     </div>
     <div class="flex items-center justify-between gap-4" id="settings-terminal">
-      <span class="inline-flex items-center gap-1"><strong>Terminal</strong><InfoTip text="Where the dashboard opens. Falls back to the system default if uninstalled." /></span>
-      <Select options={terminalOptions} value={appState.settings.terminal ?? ''} onchange={(value) => changeTerminal(value)} class="w-48" />
+      <span class="inline-flex items-center gap-1"><strong id="settings-terminal-label">Terminal</strong><InfoTip text="Where the dashboard opens. Falls back to the system default if uninstalled." /></span>
+      <Select
+        options={terminalOptions}
+        value={appState.settings.terminal ?? ''}
+        onchange={(value) => changeTerminal(value)}
+        ariaLabelledby="settings-terminal-label"
+        class="w-48"
+      />
     </div>
   </div>
 
@@ -240,8 +295,14 @@
   {/if}
 
   <div class="grid gap-1.5">
-    <span class="inline-flex items-center gap-1"><strong>Pin CLI path</strong><InfoTip text="Overrides PATH lookup with this exact binary; empty uses PATH." /></span>
-    <Input type="text" placeholder={appState.systemState.cliPath ?? '/usr/local/bin/mountos'} value={appState.settings.cliPathOverride ?? ''} onchange={(e) => changeCliPathOverride(e.currentTarget.value)} />
+    <span class="inline-flex items-center gap-1"><strong id="settings-cli-path-override-label">Pin CLI path</strong><InfoTip text="Overrides PATH lookup with this exact binary; empty uses PATH." /></span>
+    <Input
+      type="text"
+      placeholder={appState.systemState.cliPath ?? '/usr/local/bin/mountos'}
+      value={appState.settings.cliPathOverride ?? ''}
+      onchange={(e) => changeCliPathOverride(e.currentTarget.value)}
+      aria-labelledby="settings-cli-path-override-label"
+    />
   </div>
   <div class="flex items-center justify-between gap-4">
     <span><strong>Third party licenses</strong></span>

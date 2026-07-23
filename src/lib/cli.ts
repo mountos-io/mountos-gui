@@ -28,6 +28,7 @@ const managedFlags = new Set([
   'read-only',
   'r',
   'disk-cache-dir',
+  'disk-cache-size',
   'backend',
   'macfuse',
   'fskit',
@@ -168,6 +169,7 @@ export function buildMountArgv(profile: MountProfile): string[] {
   if (profile.readOnly) argv.push('--read-only')
   if (profile.temporaryFork) argv.push('--temporary-fork')
   if (profile.cacheDir) argv.push('--disk-cache-dir', profile.cacheDir)
+  if (profile.cacheSize) argv.push('--disk-cache-size', profile.cacheSize)
   pushBackendFlag(argv, profile.backend)
   argv.push(...profile.extraArgs)
   return argv
@@ -211,6 +213,7 @@ function pushSatelliteCredentials(argv: string[], profile: MountProfile): void {
 // flags for a regular mount but silently omit them for these other launches.
 function pushCacheAndExtraArgs(argv: string[], profile: MountProfile): void {
   if (profile.cacheDir) argv.push('--disk-cache-dir', profile.cacheDir)
+  if (profile.cacheSize) argv.push('--disk-cache-size', profile.cacheSize)
   argv.push(...profile.extraArgs)
 }
 

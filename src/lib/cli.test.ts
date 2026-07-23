@@ -65,6 +65,16 @@ describe('cli helpers', () => {
     expect(argv).not.toContain('-s')
   })
 
+  it('adds --disk-cache-dir and --disk-cache-size when set, for mount and satellite views alike', () => {
+    const cached = { ...profile, cacheDir: '/tmp/mountos cache', cacheSize: '100G' }
+    expect(buildMountArgv(cached)).toEqual(
+      expect.arrayContaining(['--disk-cache-dir', '/tmp/mountos cache', '--disk-cache-size', '100G']),
+    )
+    expect(buildDeletedArgv(cached, '/tmp/deleted-view')).toEqual(
+      expect.arrayContaining(['--disk-cache-dir', '/tmp/mountos cache', '--disk-cache-size', '100G']),
+    )
+  })
+
   it('adds --temporary-fork when enabled', () => {
     expect(buildMountArgv({ ...profile, temporaryFork: true })).toContain('--temporary-fork')
     expect(buildMountArgv({ ...profile, temporaryFork: false })).not.toContain('--temporary-fork')
@@ -80,11 +90,15 @@ describe('cli helpers', () => {
   })
 
   it('allows separate values for unmanaged flags', () => {
-    expect(validateExtraArgs(['--disk-cache-size', '10G', '--debug'])).toEqual([])
+    expect(validateExtraArgs(['--attr-cache', '2.0', '--debug'])).toEqual([])
   })
 
   it('rejects --destination as a managed flag, matching --mount', () => {
     expect(validateExtraArgs(['--destination', '/tmp/other'])).toEqual(['--destination', '/tmp/other'])
+  })
+
+  it('rejects --disk-cache-size as a managed flag now that MountProfile.cacheSize covers it', () => {
+    expect(validateExtraArgs(['--disk-cache-size', '10G'])).toEqual(['--disk-cache-size', '10G'])
   })
 
   it('validates FSKit mount path prefix', () => {

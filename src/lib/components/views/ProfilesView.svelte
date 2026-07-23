@@ -324,7 +324,7 @@
           id="advanced-options"
           value={appState.extraArgsInput}
           oninput={(e) => setExtraArgs(e.currentTarget.value)}
-          placeholder="Flags mountos mount accepts but this form doesn't manage, e.g. --disk-cache-size 10G"
+          placeholder="Flags mountos mount accepts but this form doesn't manage, e.g. --attr-cache 2.0"
         />
       </div>
 
