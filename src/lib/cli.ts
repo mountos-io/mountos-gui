@@ -178,8 +178,18 @@ export function buildMountArgv(profile: MountProfile): string[] {
 // — same hand-synced-duplicate caveat as buildMountArgv: these only drive the
 // live command preview shown in each dialog, Rust independently rebuilds and
 // re-validates everything from the on-disk profile before acting.
+// Short and non-linguistic: "(deleted)"/"(snapshot)"/"(version)" reads fine
+// once, but a bare parenthesized suffix breaks a shell (unquoted "(" opens a
+// subshell) if this argv is ever copied out of the preview and pasted
+// directly -- mirrors Rust's satellite_volname/satellite_suffix exactly.
+function satelliteSuffix(): string {
+  return String(Math.floor(Math.random() * 10000)).padStart(4, '0')
+}
+
 function satelliteVolname(profile: MountProfile, kind: string): string {
-  return profile.volume ? `${profile.volume} (${kind})` : `mountOS ${kind}`
+  const abbrev = kind === 'snapshot' ? 'snap' : kind === 'deleted' ? 'del' : kind === 'version' ? 'ver' : kind
+  const suffix = satelliteSuffix()
+  return profile.volume ? `${profile.volume}-${abbrev}-${suffix}` : `mountOS-${abbrev}-${suffix}`
 }
 
 function buildSatellitePrefix(subcommand: string, profile: MountProfile, kind: string): string[] {

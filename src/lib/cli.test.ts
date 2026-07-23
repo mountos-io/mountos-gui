@@ -194,6 +194,22 @@ describe('cli helpers', () => {
     expect(padded).toContain('--idle-timeout=5m')
   })
 
+  it('builds satellite --volname values that are shell-safe (no spaces or parens)', () => {
+    // A previewed command is sometimes copied straight into a terminal, so
+    // the value can't rely on shell quoting the caller may not add. Mirrors
+    // Rust's satellite_volname format exactly: "<volume>-<abbrev>-<4 digits>".
+    const cases: [string[], RegExp][] = [
+      [buildSnapshotArgv(profile, '/tmp/snap-view', '-1d'), /^vol-1-snap-\d{4}$/],
+      [buildDeletedArgv(profile, '/tmp/deleted-view'), /^vol-1-del-\d{4}$/],
+      [buildVersionArgv(profile, '/tmp/version-view', { inode: '1' }), /^vol-1-ver-\d{4}$/],
+    ]
+    for (const [argv, shape] of cases) {
+      const volname = argv[argv.indexOf('--volname') + 1]
+      expect(volname).toMatch(shape)
+      expect(volname).not.toMatch(/[\s()]/)
+    }
+  })
+
   it('builds version argv with --path and --full-chain for the browse-picked selector', () => {
     const argv = buildVersionArgv(profile, '/tmp/version-view', { path: '/Volumes/data/report.txt' }, 'number', undefined, true)
     expect(argv).toEqual(expect.arrayContaining(['--path', '/Volumes/data/report.txt']))

@@ -7,10 +7,12 @@
     FilePlus,
     FolderOpen,
     Ghost,
+    HardDrive,
     History,
     LayoutDashboard,
     Lightbulb,
     OctagonX,
+    Plus,
     Recycle,
     Search,
     SquareTerminal,
@@ -25,6 +27,7 @@
   import GatewayLaunchesPanel from '$lib/components/GatewayLaunchesPanel.svelte'
   import InstanceConfigPanel from '$lib/components/InstanceConfigPanel.svelte'
   import InfoTip from '$lib/components/shared/InfoTip.svelte'
+  import { focusOnMount } from '$lib/actions'
   import { backendBadgeStyle, formatMountedSince, formatUptime, gatewayProtocolsLabel, healthTitle, healthTone, viewModeBadge, volumeKindBadgeStyle } from '$lib/health'
   import type { MountInstance } from '$lib/types'
   import {
@@ -37,9 +40,12 @@
     computed,
     DEFAULT_POLL_SECONDS,
     gatewayInfoForInstance,
+    newProfile,
     openDashboard,
     profileForInstance,
     requestDeletedView,
+    requestExternalDeletedView,
+    requestExternalVersionView,
     requestUnmount,
     requestUnmountAll,
     requestVersionView,
@@ -87,7 +93,7 @@
   }
 </script>
 
-<div class="corner-brackets relative border border-border/30 m-[22px] mb-0 p-4">
+<div class="corner-brackets relative border border-border/30 m-[22px] mb-0 p-4 outline-hidden" tabindex="-1" use:focusOnMount>
   <div class="tech-grid absolute inset-0 pointer-events-none" aria-hidden="true"></div>
   <div class="relative flex flex-wrap items-center justify-between gap-3">
     <label class="relative flex items-center max-w-sm">
@@ -111,6 +117,23 @@
 
 <section class="surface m-[22px] mt-4 p-4">
   <h3 class="mb-6">Running instances</h3>
+  {#if appState.loaded && computed.filteredInstances.length === 0}
+    <div class="tech-grid grid justify-items-center gap-2 p-7 text-center">
+      <Unplug size={28} aria-hidden="true" />
+      <strong>No instances</strong>
+      <p>Mount a saved profile, or mount from the CLI. Active mounts appear here after refresh.</p>
+      <div class="flex flex-wrap justify-center gap-2">
+        <Button variant="primary" type="button" class="cyberpunk-skewed-sm" onclick={() => newProfile()}>
+          <Plus size={17} aria-hidden="true" />
+          New profile
+        </Button>
+        <Button variant="outline" type="button" onclick={() => (appState.view = 'profiles')}>
+          <HardDrive size={17} aria-hidden="true" />
+          Go to Profiles
+        </Button>
+      </div>
+    </div>
+  {:else}
   <Table.Root containerLabel="Running instances">
     <Table.Header>
       <Table.Row>
@@ -343,14 +366,22 @@
                         <DropdownMenu.Item
                           class="flex cursor-pointer items-center gap-2 px-4 py-2 text-sm outline-none data-highlighted:bg-accent"
                           disabled={appState.busy}
-                          onSelect={() => requestDeletedView(profileForInstance(instance))}
+                          onSelect={() => {
+                            const profile = profileForInstance(instance)
+                            if (profile) requestDeletedView(profile)
+                            else void requestExternalDeletedView(instance)
+                          }}
                         >
                           <Recycle size={16} aria-hidden="true" /> Open deleted-files view
                         </DropdownMenu.Item>
                         <DropdownMenu.Item
                           class="flex cursor-pointer items-center gap-2 px-4 py-2 text-sm outline-none data-highlighted:bg-accent"
                           disabled={appState.busy}
-                          onSelect={() => requestVersionView(profileForInstance(instance))}
+                          onSelect={() => {
+                            const profile = profileForInstance(instance)
+                            if (profile) requestVersionView(profile)
+                            else void requestExternalVersionView(instance)
+                          }}
                         >
                           <History size={16} aria-hidden="true" /> Open file-version view
                         </DropdownMenu.Item>
@@ -379,19 +410,10 @@
               </Table.Cell>
             </Table.Row>
           {/if}
-        {:else}
-          <Table.Row>
-            <Table.Cell colspan={5}>
-              <div class="tech-grid grid gap-1.5 p-7 text-center">
-                <strong>No instances</strong>
-                <p>Mount a saved profile, or mount from the CLI.</p>
-                <p>Active mounts appear here after refresh.</p>
-              </div>
-            </Table.Cell>
-          </Table.Row>
         {/each}
       {/if}
     </Table.Body>
   </Table.Root>
+  {/if}
 </section>
 <GatewayLaunchesPanel />

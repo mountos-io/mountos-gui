@@ -29,6 +29,11 @@
   import CommandPreview from '$lib/components/CommandPreview.svelte'
   import InfoTip from '$lib/components/shared/InfoTip.svelte'
   import ForkBrowserView from '$lib/components/views/ForkBrowserView.svelte'
+  import SnapshotView from '$lib/components/views/SnapshotView.svelte'
+  import DeletedView from '$lib/components/views/DeletedView.svelte'
+  import VersionView from '$lib/components/views/VersionView.svelte'
+  import GatewayView from '$lib/components/views/GatewayView.svelte'
+  import { focusOnMount } from '$lib/actions'
   import { FSKIT_MOUNT_PREFIX } from '$lib/cli'
   import { volumeKindBadgeStyle } from '$lib/health'
   import type { Backend } from '$lib/types'
@@ -42,6 +47,7 @@
     enterForkBrowser,
     exportSelected,
     forgetSecret,
+    hasRunningInstance,
     newProfile,
     patchProfile,
     persistSelected,
@@ -71,7 +77,20 @@
   ]
 </script>
 
-<section class="grid grid-cols-[240px_minmax(0,1fr)] gap-4 m-[22px]">
+{#if computed.selectedProfile && appState.profileSubView !== 'editor'}
+  {#if appState.profileSubView === 'forks'}
+    <ForkBrowserView />
+  {:else if appState.profileSubView === 'snapshot'}
+    <SnapshotView />
+  {:else if appState.profileSubView === 'deleted'}
+    <DeletedView />
+  {:else if appState.profileSubView === 'version'}
+    <VersionView />
+  {:else if appState.profileSubView === 'gateway'}
+    <GatewayView />
+  {/if}
+{:else}
+<section class="grid grid-cols-[240px_minmax(0,1fr)] gap-4 m-[22px] outline-hidden" tabindex="-1" use:focusOnMount>
   <div class="surface p-4">
     <h3 class="mb-4">Saved Profiles</h3>
     <label class="relative flex items-center mb-3">
@@ -99,9 +118,7 @@
     </div>
   </div>
 
-  {#if computed.selectedProfile && appState.viewingForks}
-    <ForkBrowserView />
-  {:else if computed.selectedProfile}
+  {#if computed.selectedProfile}
     {@const selectedProfile = computed.selectedProfile}
     <form class="surface corner-brackets p-4 grid gap-4" onsubmit={(event) => { event.preventDefault(); void persistSelected() }}>
       <div class="flex items-start justify-end gap-4">
@@ -113,7 +130,15 @@
           <Button variant="outline" size="icon" class="relative" title="Export profile (no secret)" aria-label="Export profile" disabled={appState.busy} onclick={exportSelected}>
             <FileDown size={16} aria-hidden="true" />
           </Button>
-          <Button variant="destructive" size="icon" class="relative" title="Delete profile" aria-label="Delete profile" disabled={appState.busy} onclick={() => (appState.deletePromptFor = selectedProfile)}>
+          <Button
+            variant="destructive"
+            size="icon"
+            class="relative"
+            title={hasRunningInstance(selectedProfile.id) ? 'Unmount this profile before deleting it' : 'Delete profile'}
+            aria-label="Delete profile"
+            disabled={appState.busy || hasRunningInstance(selectedProfile.id)}
+            onclick={() => (appState.deletePromptFor = selectedProfile)}
+          >
             <Trash2 size={16} aria-hidden="true" />
           </Button>
           <div class="relative h-6 w-px bg-border/60" aria-hidden="true"></div>
@@ -304,7 +329,7 @@
       </div>
 
       {#if appState.mountHelpVisible}
-        <CommandPreview label="MOUNTOS MOUNT -H">
+        <CommandPreview label="MOUNTOS MOUNT -H" text={appState.mountHelpText}>
           <pre class="m-0 whitespace-pre-wrap break-words"><code>{appState.mountHelpText}</code></pre>
         </CommandPreview>
       {/if}
@@ -317,7 +342,7 @@
         <Callout>Rejected managed flags: {appState.rejectedArgs.join(', ')}</Callout>
       {/if}
 
-      <CommandPreview label="COMMAND PREVIEW">
+      <CommandPreview label="COMMAND PREVIEW" text={appState.commandText || `mountos ${buildMountArgv(selectedProfile).join(' ')}`}>
         <code>{appState.commandText || `mountos ${buildMountArgv(selectedProfile).join(' ')}`}</code>
       </CommandPreview>
     </form>
@@ -333,3 +358,4 @@
     </div>
   {/if}
 </section>
+{/if}

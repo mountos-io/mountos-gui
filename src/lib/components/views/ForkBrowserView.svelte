@@ -5,12 +5,13 @@
   import { Label } from '$lib/components/ui/label'
   import { Badge } from '$lib/components/ui/badge'
   import CommandPreview from '$lib/components/CommandPreview.svelte'
+  import { focusOnMount } from '$lib/actions'
   import {
     appState,
     buildForkListArgv,
     computed,
     drillIntoFork,
-    exitForkBrowser,
+    exitProfileSubView,
     requestForkCreate,
     requestForkDelete,
     requestForkRestore,
@@ -31,9 +32,9 @@
   })
 </script>
 
-<section class="surface corner-brackets m-[22px] p-4 grid gap-4">
+<section class="surface corner-brackets m-[22px] p-4 grid gap-4 outline-hidden" tabindex="-1" use:focusOnMount>
   <div class="flex items-center justify-between gap-4">
-    <button type="button" class="flex items-center gap-1.5 text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring" onclick={exitForkBrowser}>
+    <button type="button" class="flex items-center gap-1.5 text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring" onclick={exitProfileSubView}>
       <ChevronLeft size={16} aria-hidden="true" /> Back to profile
     </button>
     <div class="flex items-center gap-2">
@@ -56,7 +57,7 @@
     </div>
   {/if}
 
-  <CommandPreview>
+  <CommandPreview label="COMMAND PREVIEW" text={`mountos ${buildForkListArgv(profile).join(' ')}`}>
     <code>{`mountos ${buildForkListArgv(profile).join(' ')}`}</code>
   </CommandPreview>
 

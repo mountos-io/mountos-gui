@@ -12,10 +12,8 @@
   import DeleteProfileDialog from '$lib/components/dialogs/DeleteProfileDialog.svelte'
   import UnmountDialog from '$lib/components/dialogs/UnmountDialog.svelte'
   import StopGatewayDialog from '$lib/components/dialogs/StopGatewayDialog.svelte'
-  import SnapshotDialog from '$lib/components/dialogs/SnapshotDialog.svelte'
-  import DeletedViewDialog from '$lib/components/dialogs/DeletedViewDialog.svelte'
-  import VersionViewDialog from '$lib/components/dialogs/VersionViewDialog.svelte'
-  import GatewayDialog from '$lib/components/dialogs/GatewayDialog.svelte'
+  import ExternalDeletedViewDialog from '$lib/components/dialogs/ExternalDeletedViewDialog.svelte'
+  import ExternalVersionViewDialog from '$lib/components/dialogs/ExternalVersionViewDialog.svelte'
   import ForkCreateDialog from '$lib/components/dialogs/ForkCreateDialog.svelte'
   import ForkDeleteDialog from '$lib/components/dialogs/ForkDeleteDialog.svelte'
   import ForkRestoreDialog from '$lib/components/dialogs/ForkRestoreDialog.svelte'
@@ -27,7 +25,7 @@
     computed,
     DEFAULT_POLL_SECONDS,
     drillIntoFork,
-    exitForkBrowser,
+    exitProfileSubView,
     HIDDEN_POLL_MS,
     loadSettings,
     newProfile,
@@ -82,15 +80,19 @@
   // Only the Profiles view ever grows past one crumb (a selected profile,
   // then however many levels deep a fork drill-down goes).
   type Crumb = { label: string; onclick?: () => void }
+  const subViewLabels = { forks: 'Forks', snapshot: 'Snapshot view', deleted: 'Deleted files', version: 'File versions', gateway: 'Gateway' } as const
+
   const breadcrumbs = $derived.by((): Crumb[] => {
-    const crumbs: Array<Crumb & { onclick?: () => void }> = [{ label: viewTitle(appState.view), onclick: exitForkBrowser }]
+    const crumbs: Array<Crumb & { onclick?: () => void }> = [{ label: viewTitle(appState.view), onclick: exitProfileSubView }]
     if (appState.view === 'profiles' && computed.selectedProfile) {
-      crumbs.push({ label: computed.selectedProfile.name, onclick: exitForkBrowser })
-      if (appState.viewingForks) {
-        crumbs.push({ label: 'Forks', onclick: () => drillIntoFork(null) })
+      crumbs.push({ label: computed.selectedProfile.name, onclick: exitProfileSubView })
+      if (appState.profileSubView === 'forks') {
+        crumbs.push({ label: subViewLabels.forks, onclick: () => drillIntoFork(null) })
         for (const fork of computed.forkBreadcrumbTrail) {
           crumbs.push({ label: fork.name || `Fork #${fork.fid}`, onclick: () => drillIntoFork(fork.fid) })
         }
+      } else if (appState.profileSubView !== 'editor') {
+        crumbs.push({ label: subViewLabels[appState.profileSubView], onclick: exitProfileSubView })
       }
     }
     // Every crumb but the last is clickable; the last is the current page.
@@ -255,10 +257,8 @@
 <DeleteProfileDialog />
 <UnmountDialog />
 <StopGatewayDialog />
-<SnapshotDialog />
-<DeletedViewDialog />
-<VersionViewDialog />
-<GatewayDialog />
+<ExternalDeletedViewDialog />
+<ExternalVersionViewDialog />
 <ForkCreateDialog />
 <ForkDeleteDialog />
 <ForkRestoreDialog />

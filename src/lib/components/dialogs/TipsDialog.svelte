@@ -26,7 +26,7 @@
           <strong>{tip.title}</strong>
           <p class="text-sm text-muted-foreground">{tip.body}</p>
           {#if tip.command}
-            <CommandPreview><code>{tip.command}</code></CommandPreview>
+            <CommandPreview text={tip.command}><code>{tip.command}</code></CommandPreview>
           {:else if tip.settingsSection}
             <Button type="button" size="sm" variant="outline" class="w-fit" onclick={() => openSettingsSection(tip.settingsSection!)}>
               <Settings size={14} aria-hidden="true" />

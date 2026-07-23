@@ -10,6 +10,7 @@
   import Callout from '$lib/components/Callout.svelte'
   import CommandPreview from '$lib/components/CommandPreview.svelte'
   import InfoTip from '$lib/components/shared/InfoTip.svelte'
+  import { focusOnMount } from '$lib/actions'
   import { themeState, setTheme, setSkin, setFontSize, setGrayscale, setBrightness } from '$lib/theme.svelte'
   import type { Theme, FontSize } from '$lib/theme.svelte'
   import { presetsForMode, defaultSkin } from '$lib/themes'
@@ -69,7 +70,7 @@
   const defaultSkinName = $derived(defaultSkin(themeState.resolvedMode))
 </script>
 
-<section class="corner-brackets surface m-[22px] p-4 grid gap-5">
+<section class="corner-brackets surface m-[22px] p-4 grid gap-5 outline-hidden" tabindex="-1" use:focusOnMount>
   <h3>Desktop policies</h3>
 
   <div class="grid gap-3" id="settings-appearance">
@@ -265,7 +266,7 @@
   </div>
   <p>Registers this mountos binary as a read-only Model Context Protocol server for Claude Desktop, Claude Code, Codex and Gemini, so an AI agent can inspect mounts, stats and diagnostics without file access.</p>
   {#if appState.mcpStatusText}
-    <CommandPreview label="MCP STATUS">
+    <CommandPreview label="MCP STATUS" text={appState.mcpStatusText}>
       <pre class="m-0 whitespace-pre-wrap break-words"><code>{appState.mcpStatusText}</code></pre>
     </CommandPreview>
   {/if}

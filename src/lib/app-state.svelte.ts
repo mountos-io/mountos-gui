@@ -44,12 +44,14 @@ import {
   mountHelp,
   mountProfile,
   openDeletedView,
+  openDeletedViewForInstance,
   openDiagnosticsBundle,
   openGateway,
   openLostFound,
   openSnapshotView,
   openTarget,
   openVersionView,
+  openVersionViewForInstance,
   saveProfile,
   saveSettings,
   setProfileSecret,
@@ -71,6 +73,22 @@ import type {
 } from './types'
 
 export type View = 'instances' | 'profiles' | 'settings'
+
+// The profile editor's right-hand pane: the plain editor form, or one of the
+// five full-width sub-views nested under the selected profile (Forks and the
+// four former Snapshot/Deleted/Version/Gateway dialogs).
+export type ProfileSubView = 'editor' | 'forks' | 'snapshot' | 'deleted' | 'version' | 'gateway'
+
+// The subset of an instance's own live .mountOS/.config (read via
+// getInstanceConfig) relevant to the external Deleted/Version dialogs --
+// enough to know whether a secret is needed and to render a real COMMAND
+// PREVIEW, without a MountProfile to read from.
+export interface ExternalMountConfig {
+  discoveryUrl: string
+  fork: string
+  volume: string
+  accessKeyId: string
+}
 
 // mountOS access key IDs are fixed-length; this only checks length (not
 // charset) since that's the one constraint the GUI can enforce cheaply.
@@ -168,7 +186,7 @@ const state = $state({
   // the profile editor via a "Forks" satellite button -- not embedded inline
   // in the editor form. Always available; only --force on delete is gated
   // (settings.allowForkForceDelete).
-  viewingForks: false,
+  profileSubView: 'editor' as ProfileSubView,
   forks: [] as Fork[],
   // null = viewing the profile's own root ("main"); otherwise the fid of the
   // fork currently drilled into. Pure client-side navigation over `forks`,
@@ -199,12 +217,14 @@ const state = $state({
   forkRestoreSecretValue: '',
   forkRestoreError: '',
 
-  // Snapshot/Deleted/Version view-mount dialogs: destination is always an
-  // explicit folder pick (browseFolder), never free-typed -- -m/--destination
-  // is mandatory server-side for all three (no auto-derivation exists).
+  // Snapshot/Deleted/Version view-mounts: destination is always an explicit
+  // folder pick (browseFolder), never free-typed -- -m/--destination is
+  // mandatory server-side for all three (no auto-derivation exists).
   // Profile-based, not instance-based: none of these CLI commands need an
   // existing running mount, they connect to discovery+dataserv independently.
-  snapshotPromptFor: null as MountProfile | null,
+  // Which profile: computed.selectedProfile (see profileSubView), not a
+  // separately-captured field -- patchProfile replaces objects in
+  // state.profiles on every edit, so a second captured copy would drift.
   snapshotDestination: '',
   snapshotTimeMode: 'absolute' as 'absolute' | 'relative',
   snapshotAbsoluteValue: '',
@@ -213,7 +233,6 @@ const state = $state({
   snapshotSecretValue: '',
   snapshotError: '',
 
-  deletedPromptFor: null as MountProfile | null,
   deletedDestination: '',
   // --from has the same absolute-or-relative duality as snapshot's
   // --timestamp (CLI default applies when omitted, hence the extra 'default'
@@ -226,7 +245,6 @@ const state = $state({
   deletedSecretValue: '',
   deletedError: '',
 
-  versionPromptFor: null as MountProfile | null,
   versionDestination: '',
   versionPath: '',
   // Advanced/power-user fallback: hand-typed inode, plain by-inode lookup
@@ -238,10 +256,8 @@ const state = $state({
   versionSecretValue: '',
   versionError: '',
 
-  // Gateway launch (S3/HDFS): own dialog, same family as Snapshot/Deleted/
-  // Version -- profile-based, never persisted to the profile (launch params,
-  // not identity).
-  gatewayPromptFor: null as MountProfile | null,
+  // Gateway launch (S3/HDFS): same family as Snapshot/Deleted/Version --
+  // profile-based, never persisted to the profile (launch params, not identity).
   gatewayS3: true,
   gatewayHdfs: false,
   gatewayPort: '',
@@ -252,6 +268,44 @@ const state = $state({
   gatewaySecretValue: '',
   gatewayError: '',
   gatewayLaunches: [] as GatewayLaunchRecord[],
+
+  // Deleted/Version for an instance with NO saved profile at all (mounted
+  // from the terminal, or any tool outside this app) -- profile is
+  // deliberately optional, see openDeletedViewForInstance/
+  // openVersionViewForInstance in tauri.ts. Kept as a modal (operates on a
+  // MountInstance, not a MountProfile) rather than folded into
+  // DeletedView/VersionView -- same field shape as the profile-based
+  // deletedX/versionX fields above, duplicated on purpose rather than
+  // forcing one component to serve two different underlying data shapes.
+  externalDeletedPromptFor: null as MountInstance | null,
+  externalDeletedDestination: '',
+  externalDeletedFromMode: 'default' as 'default' | 'absolute' | 'relative',
+  externalDeletedFromAbsoluteValue: '',
+  externalDeletedFromRelativeQty: '',
+  externalDeletedFromRelativeUnit: 'd' as 'm' | 'h' | 'd',
+  externalDeletedIdleTimeout: '30m',
+  externalDeletedSecretValue: '',
+  externalDeletedError: '',
+  // Live-read off the instance's own .mountOS/.config when the dialog opens
+  // (see requestExternalDeletedView) -- there is no MountProfile to answer
+  // "does this need a secret" or build a COMMAND PREVIEW the way
+  // profile.secretRef/vaultStatus and buildDeletedArgv(profile, ...) do for
+  // the profile-based case. null means not yet fetched (or unreadable) --
+  // computed.externalDeletedNeedsSecret treats that as "assume yes": hiding
+  // the field on an unreadable config risks a launch that fails with
+  // "secret required" and no field visible to fix it.
+  externalDeletedConfig: null as ExternalMountConfig | null,
+
+  externalVersionPromptFor: null as MountInstance | null,
+  externalVersionDestination: '',
+  externalVersionPath: '',
+  externalVersionInode: '',
+  externalVersionFullChain: false,
+  externalVersionFormat: 'number' as 'number' | 'date',
+  externalVersionIdleTimeout: '30m',
+  externalVersionSecretValue: '',
+  externalVersionError: '',
+  externalVersionConfig: null as ExternalMountConfig | null,
 })
 
 export const appState = state
@@ -283,6 +337,72 @@ const deletedFromValue = $derived(
         ? `${state.deletedFromRelativeQty.trim()}${state.deletedFromRelativeUnit}`
         : '',
 )
+
+const externalDeletedFromValue = $derived(
+  state.externalDeletedFromMode === 'default'
+    ? ''
+    : state.externalDeletedFromMode === 'absolute'
+      ? state.externalDeletedFromAbsoluteValue
+      : state.externalDeletedFromRelativeQty.trim()
+        ? `${state.externalDeletedFromRelativeQty.trim()}${state.externalDeletedFromRelativeUnit}`
+        : '',
+)
+
+// Fills in just the fields buildDeletedArgv/buildVersionArgv actually read
+// (discoveryUrl/fork/volume/accessKeyId/cacheDir/extraArgs -- confirmed
+// against cli.ts, neither reads backend) so the external dialogs' COMMAND
+// PREVIEW can reuse the exact same builders the profile-based views do,
+// rather than a second, drift-prone reimplementation of the same argv
+// logic. Never sent anywhere -- purely local, display-only; the real launch
+// goes through open_deleted_view_for_instance/open_version_view_for_instance,
+// which re-derive their own profile server-side from the live mount itself.
+function previewProfileFromExternalConfig(instance: MountInstance, config: ExternalMountConfig | null): MountProfile {
+  return {
+    id: 'external',
+    schemaVersion: 1,
+    kind: 'mount',
+    name: instance.name || 'External mount',
+    volume: config?.volume ?? '',
+    fork: config?.fork ?? '',
+    mountPath: instance.mountPath,
+    discoveryUrl: config?.discoveryUrl ?? '',
+    accessKeyId: config?.accessKeyId ?? '',
+    secretRef: 'prompt',
+    backend: instance.backend ?? 'auto',
+    readOnly: false,
+    autoRemount: false,
+    temporaryFork: false,
+    extraArgs: [],
+    createdAt: '',
+    updatedAt: '',
+  }
+}
+
+// null (not yet fetched, or unreadable) is treated as "assume yes": hiding
+// the secret field on an unreadable config risks a launch that fails with
+// "secret required" and no field visible to fix it.
+const externalDeletedNeedsSecret = $derived(!state.externalDeletedConfig || Boolean(state.externalDeletedConfig.accessKeyId))
+
+const externalDeletedCommandText = $derived.by(() => {
+  const instance = state.externalDeletedPromptFor
+  if (!instance) return ''
+  const profile = previewProfileFromExternalConfig(instance, state.externalDeletedConfig)
+  const destination = state.externalDeletedDestination || '<destination>'
+  return `mountos ${buildDeletedArgv(profile, destination, externalDeletedFromValue || undefined, state.externalDeletedIdleTimeout).join(' ')}`
+})
+
+const externalVersionNeedsSecret = $derived(!state.externalVersionConfig || Boolean(state.externalVersionConfig.accessKeyId))
+
+const externalVersionCommandText = $derived.by(() => {
+  const instance = state.externalVersionPromptFor
+  if (!instance) return ''
+  const profile = previewProfileFromExternalConfig(instance, state.externalVersionConfig)
+  const destination = state.externalVersionDestination || '<destination>'
+  const path = state.externalVersionPath.trim()
+  const inode = state.externalVersionInode.trim()
+  const selector = path ? { path } : { inode: inode || '<inode>' }
+  return `mountos ${buildVersionArgv(profile, destination, selector, state.externalVersionFormat, state.externalVersionIdleTimeout, state.externalVersionFullChain).join(' ')}`
+})
 
 const gatewayProtocols = $derived([...(state.gatewayS3 ? ['s3'] : []), ...(state.gatewayHdfs ? ['hdfs'] : [])])
 
@@ -377,6 +497,11 @@ export const computed = {
   get forkBreadcrumbTrail() { return forkBreadcrumbTrail },
   get snapshotTimestampValue() { return snapshotTimestampValue },
   get deletedFromValue() { return deletedFromValue },
+  get externalDeletedFromValue() { return externalDeletedFromValue },
+  get externalDeletedNeedsSecret() { return externalDeletedNeedsSecret },
+  get externalDeletedCommandText() { return externalDeletedCommandText },
+  get externalVersionNeedsSecret() { return externalVersionNeedsSecret },
+  get externalVersionCommandText() { return externalVersionCommandText },
   get gatewayProtocols() { return gatewayProtocols },
   get selectedProfile() { return selectedProfile },
   get filteredInstances() { return filteredInstances },
@@ -615,19 +740,32 @@ export function primaryInstanceForProfile(profileId: string): MountInstance | un
   return state.systemState.instances.find((instance) => instance.profileId === profileId && !viewModeBadge(instance.viewMode))
 }
 
-// Credentials/discoveryUrl/fork are all resolved from the matching profile,
-// exactly like cloneProfileFor -- external (non-profile-backed) instances
-// have no retrievable credentials, so these actions never apply to them.
-// volumeKind mirrors the profile editor's own gate (these views are only
-// offered for general volumes there) -- there is no server-side rejection of
-// this either, so this client-side check is the only place it's enforced at
-// all.
+// Broader than primaryInstanceForProfile: any instance tied to this profile,
+// including a satellite Deleted/Version/Snapshot/Gateway view, blocks
+// deletion -- not just the primary data mount. Deleting a profile out from
+// under a running instance would orphan it: the instance keeps its
+// profileId, but find_profile server-side (src-tauri/src/lib.rs) can no
+// longer resolve it.
+export function hasRunningInstance(profileId: string): boolean {
+  return state.systemState.instances.some((instance) => instance.profileId === profileId)
+}
+
+// A profile-backed instance resolves credentials/discoveryUrl/fork from the
+// matching profile (requestDeletedView/requestVersionView); a profile-less
+// one gets them re-derived server-side from its own live .mountOS/.config
+// (requestExternalDeletedView/requestExternalVersionView, backed by
+// open_deleted_view_for_instance/open_version_view_for_instance) -- profile
+// is deliberately optional, not a requirement for these views. volumeKind
+// mirrors the profile editor's own gate (these views are only offered for
+// general volumes there); instance.volumeKind is the live read that works
+// for both cases, unlike the profile's own cached value. There is no
+// server-side rejection of Iceberg for these either, so this client-side
+// check is the only place it's enforced at all.
 export function canOpenViewsFor(instance: MountInstance): boolean {
   return (
     canOpen(instance) &&
-    Boolean(instance.profileId) &&
     !viewModeBadge(instance.viewMode) &&
-    profileForInstance(instance)?.volumeKind !== 'iceberg'
+    (instance.volumeKind ?? profileForInstance(instance)?.volumeKind) !== 'iceberg'
   )
 }
 
@@ -641,15 +779,17 @@ export function drillIntoFork(fid: number | null) {
 // editor's "Forks" satellite button. Always available -- no settings gate.
 export function enterForkBrowser(profile: MountProfile | undefined) {
   if (!profile) return
-  state.viewingForks = true
+  state.profileSubView = 'forks'
   state.forkDrillFid = null
   state.forks = []
   state.forkListSecretValue = ''
   state.forkError = ''
 }
 
-export function exitForkBrowser() {
-  state.viewingForks = false
+// Shared "leave whatever sub-view is open" exit for all five (Forks and the
+// four former dialogs) -- one back button/breadcrumb-root action, not five.
+export function exitProfileSubView() {
+  state.profileSubView = 'editor'
   state.forkDrillFid = null
 }
 
@@ -780,33 +920,25 @@ export async function confirmForkRestore() {
 // Snapshot/Deleted/Version/Gateway are all profile-based, not instance-based:
 // none of these mountos commands need an existing running mount, they
 // connect to discovery+dataserv independently using the profile's own
-// credentials. Triggered directly from the profile editor (any profile,
-// mounted or not), or -- for Deleted/Version only, per owner decision -- as a
-// row-action shortcut on a live instance via profileForInstance.
+// credentials. Reached from the profile editor (any profile, mounted or
+// not), or -- for Deleted/Version only, per owner decision -- as a
+// row-action shortcut on a live instance via profileForInstance. Either way
+// this navigates to the Profiles view and selects the profile first, so the
+// same inline sub-view opens regardless of where it was triggered from.
 export async function requestSnapshotView(profile: MountProfile | undefined) {
   if (!profile) return
-  state.snapshotPromptFor = profile
-  state.snapshotDestination = ''
-  state.snapshotTimeMode = 'absolute'
-  state.snapshotAbsoluteValue = ''
-  state.snapshotRelativeQty = ''
-  state.snapshotRelativeUnit = 'h'
-  state.snapshotSecretValue = ''
-  state.snapshotError = ''
+  state.view = 'profiles'
+  selectProfile(profile)
+  state.profileSubView = 'snapshot'
   try {
     // Best-effort default so the folder picker isn't required; Browse still
     // overrides it, and confirmSnapshotView falls back to a fresh one anyway
     // if this never resolved (bridge unavailable, permission denied, etc).
     const destination = await defaultViewDestination(profile.name, 'snap')
-    if (state.snapshotPromptFor === profile) state.snapshotDestination = destination
+    if (state.selectedProfileId === profile.id && state.profileSubView === 'snapshot') state.snapshotDestination = destination
   } catch {
     // Left blank; confirmSnapshotView computes its own fallback.
   }
-}
-
-export function cancelSnapshotPrompt() {
-  state.snapshotPromptFor = null
-  state.snapshotSecretValue = ''
 }
 
 export async function browseSnapshotDestination() {
@@ -815,14 +947,14 @@ export async function browseSnapshotDestination() {
 }
 
 export async function confirmSnapshotView() {
-  const profile = state.snapshotPromptFor
+  const profile = computed.selectedProfile
   if (!profile) return
   state.busy = true
   state.snapshotError = ''
   try {
     const destination = state.snapshotDestination || (await defaultViewDestination(profile.name, 'snap'))
     const result = await openSnapshotView(profile.id, destination, snapshotTimestampValue, state.snapshotSecretValue || undefined)
-    state.snapshotPromptFor = null
+    state.profileSubView = 'editor'
     state.snapshotSecretValue = ''
     await refresh(false)
     notify(`Snapshot view ready at ${result.target}`)
@@ -835,29 +967,18 @@ export async function confirmSnapshotView() {
 
 export async function requestDeletedView(profile: MountProfile | undefined) {
   if (!profile) return
-  state.deletedPromptFor = profile
-  state.deletedDestination = ''
-  state.deletedFromMode = 'default'
-  state.deletedFromAbsoluteValue = ''
-  state.deletedFromRelativeQty = ''
-  state.deletedFromRelativeUnit = 'd'
-  state.deletedIdleTimeout = '30m'
-  state.deletedSecretValue = ''
-  state.deletedError = ''
+  state.view = 'profiles'
+  selectProfile(profile)
+  state.profileSubView = 'deleted'
   try {
     // Best-effort default so the folder picker isn't required; Browse still
     // overrides it, and confirmDeletedView falls back to a fresh one anyway
     // if this never resolved (bridge unavailable, permission denied, etc).
     const destination = await defaultViewDestination(profile.name, 'del')
-    if (state.deletedPromptFor === profile) state.deletedDestination = destination
+    if (state.selectedProfileId === profile.id && state.profileSubView === 'deleted') state.deletedDestination = destination
   } catch {
     // Left blank; confirmDeletedView computes its own fallback.
   }
-}
-
-export function cancelDeletedPrompt() {
-  state.deletedPromptFor = null
-  state.deletedSecretValue = ''
 }
 
 export async function browseDeletedDestination() {
@@ -866,7 +987,7 @@ export async function browseDeletedDestination() {
 }
 
 export async function confirmDeletedView() {
-  const profile = state.deletedPromptFor
+  const profile = computed.selectedProfile
   if (!profile) return
   state.busy = true
   state.deletedError = ''
@@ -879,7 +1000,7 @@ export async function confirmDeletedView() {
       state.deletedIdleTimeout.trim() || undefined,
       state.deletedSecretValue || undefined,
     )
-    state.deletedPromptFor = null
+    state.profileSubView = 'editor'
     state.deletedSecretValue = ''
     await refresh(false)
     notify(`Deleted-files view ready at ${result.target}`)
@@ -892,29 +1013,18 @@ export async function confirmDeletedView() {
 
 export async function requestVersionView(profile: MountProfile | undefined) {
   if (!profile) return
-  state.versionPromptFor = profile
-  state.versionDestination = ''
-  state.versionPath = ''
-  state.versionInode = ''
-  state.versionFullChain = false
-  state.versionFormat = 'number'
-  state.versionIdleTimeout = '30m'
-  state.versionSecretValue = ''
-  state.versionError = ''
+  state.view = 'profiles'
+  selectProfile(profile)
+  state.profileSubView = 'version'
   try {
     // Best-effort default so the folder picker isn't required; Browse still
     // overrides it, and confirmVersionView falls back to a fresh one anyway
     // if this never resolved (bridge unavailable, permission denied, etc).
     const destination = await defaultViewDestination(profile.name, 'ver')
-    if (state.versionPromptFor === profile) state.versionDestination = destination
+    if (state.selectedProfileId === profile.id && state.profileSubView === 'version') state.versionDestination = destination
   } catch {
     // Left blank; confirmVersionView computes its own fallback.
   }
-}
-
-export function cancelVersionPrompt() {
-  state.versionPromptFor = null
-  state.versionSecretValue = ''
 }
 
 export async function browseVersionDestination() {
@@ -955,7 +1065,7 @@ export async function mountAndBrowseVersionFile(profile: MountProfile) {
 }
 
 export async function confirmVersionView() {
-  const profile = state.versionPromptFor
+  const profile = computed.selectedProfile
   if (!profile) return
   const path = state.versionPath.trim()
   const inode = state.versionInode.trim()
@@ -976,7 +1086,7 @@ export async function confirmVersionView() {
       state.versionSecretValue || undefined,
       state.versionFullChain,
     )
-    state.versionPromptFor = null
+    state.profileSubView = 'editor'
     state.versionSecretValue = ''
     await refresh(false)
     notify(`Version view ready at ${result.target}`)
@@ -987,23 +1097,176 @@ export async function confirmVersionView() {
   }
 }
 
-export function requestGatewayView(profile: MountProfile | undefined) {
-  if (!profile) return
-  state.gatewayPromptFor = profile
-  state.gatewayS3 = true
-  state.gatewayHdfs = false
-  state.gatewayPort = ''
-  state.gatewayOnly = false
-  state.gatewayNoLoopback = false
-  state.gatewayCertPath = ''
-  state.gatewayKeyPath = ''
-  state.gatewaySecretValue = ''
-  state.gatewayError = ''
+export function cancelExternalDeletedView() {
+  state.externalDeletedPromptFor = null
+  state.externalDeletedSecretValue = ''
 }
 
-export function cancelGatewayPrompt() {
-  state.gatewayPromptFor = null
-  state.gatewaySecretValue = ''
+// Reached only from InstancesView's row dropdown, for an instance
+// canOpenViewsFor allows but profileForInstance can't resolve. Fetches a
+// destination suggestion and a needs-secret hint from the live mount's own
+// config -- best-effort, same as requestDeletedView's own destination
+// fetch; confirmExternalDeletedView computes its own fallback either way.
+export async function requestExternalDeletedView(instance: MountInstance) {
+  state.externalDeletedPromptFor = instance
+  state.externalDeletedDestination = ''
+  state.externalDeletedFromMode = 'default'
+  state.externalDeletedFromAbsoluteValue = ''
+  state.externalDeletedFromRelativeQty = ''
+  state.externalDeletedFromRelativeUnit = 'd'
+  state.externalDeletedIdleTimeout = '30m'
+  state.externalDeletedSecretValue = ''
+  state.externalDeletedError = ''
+  state.externalDeletedConfig = null
+  try {
+    const destination = await defaultViewDestination(instance.name || 'mount', 'del')
+    if (state.externalDeletedPromptFor === instance) state.externalDeletedDestination = destination
+  } catch {
+    // Left blank; confirmExternalDeletedView computes its own fallback.
+  }
+  try {
+    const config = JSON.parse(await getInstanceConfig(instance.mountPath))
+    if (state.externalDeletedPromptFor === instance) {
+      state.externalDeletedConfig = {
+        discoveryUrl: typeof config.discoveryUrl === 'string' ? config.discoveryUrl : '',
+        fork: typeof config.forkName === 'string' ? config.forkName : '',
+        volume: typeof config.volumeName === 'string' ? config.volumeName : '',
+        accessKeyId: typeof config.accessId === 'string' ? config.accessId : '',
+      }
+    }
+  } catch {
+    // Unreadable config: externalDeletedConfig stays null, which
+    // computed.externalDeletedNeedsSecret treats as "assume yes" rather
+    // than hiding a field the launch might need.
+  }
+}
+
+export async function browseExternalDeletedDestination() {
+  const chosen = await browseFolder('Choose deleted-files view destination folder')
+  if (chosen) state.externalDeletedDestination = chosen
+}
+
+export async function confirmExternalDeletedView() {
+  const instance = state.externalDeletedPromptFor
+  if (!instance) return
+  state.busy = true
+  state.externalDeletedError = ''
+  try {
+    const destination = state.externalDeletedDestination || (await defaultViewDestination(instance.name || 'mount', 'del'))
+    const result = await openDeletedViewForInstance(
+      instance.mountPath,
+      instance.backend ?? 'auto',
+      destination,
+      externalDeletedFromValue || undefined,
+      state.externalDeletedIdleTimeout.trim() || undefined,
+      state.externalDeletedSecretValue || undefined,
+    )
+    state.externalDeletedPromptFor = null
+    state.externalDeletedSecretValue = ''
+    await refresh(false)
+    notify(`Deleted-files view ready at ${result.target}`)
+  } catch (error) {
+    state.externalDeletedError = describeError(error)
+  } finally {
+    state.busy = false
+  }
+}
+
+export function cancelExternalVersionView() {
+  state.externalVersionPromptFor = null
+  state.externalVersionSecretValue = ''
+}
+
+export async function requestExternalVersionView(instance: MountInstance) {
+  state.externalVersionPromptFor = instance
+  state.externalVersionDestination = ''
+  state.externalVersionPath = ''
+  state.externalVersionInode = ''
+  state.externalVersionFullChain = false
+  state.externalVersionFormat = 'number'
+  state.externalVersionIdleTimeout = '30m'
+  state.externalVersionSecretValue = ''
+  state.externalVersionError = ''
+  state.externalVersionConfig = null
+  try {
+    const destination = await defaultViewDestination(instance.name || 'mount', 'ver')
+    if (state.externalVersionPromptFor === instance) state.externalVersionDestination = destination
+  } catch {
+    // Left blank; confirmExternalVersionView computes its own fallback.
+  }
+  try {
+    const config = JSON.parse(await getInstanceConfig(instance.mountPath))
+    if (state.externalVersionPromptFor === instance) {
+      state.externalVersionConfig = {
+        discoveryUrl: typeof config.discoveryUrl === 'string' ? config.discoveryUrl : '',
+        fork: typeof config.forkName === 'string' ? config.forkName : '',
+        volume: typeof config.volumeName === 'string' ? config.volumeName : '',
+        accessKeyId: typeof config.accessId === 'string' ? config.accessId : '',
+      }
+    }
+  } catch {
+    // Unreadable config: externalVersionConfig stays null, which
+    // computed.externalVersionNeedsSecret treats as "assume yes" rather
+    // than hiding a field the launch might need.
+  }
+}
+
+export async function browseExternalVersionDestination() {
+  const chosen = await browseFolder('Choose file-version view destination folder')
+  if (chosen) state.externalVersionDestination = chosen
+}
+
+// Unlike browseVersionFile (profile-based, may not be mounted yet), an
+// external instance in the dropdown IS already a live mount -- that's the
+// only way it got a row to click this from -- so there is no "mount first"
+// branch to handle here.
+export async function browseExternalVersionFile(instance: MountInstance) {
+  const chosen = await pickVersionFile(`Choose a file from "${instance.name || 'this mount'}"`, instance.mountPath)
+  if (chosen) {
+    state.externalVersionPath = chosen
+    state.externalVersionError = ''
+  }
+}
+
+export async function confirmExternalVersionView() {
+  const instance = state.externalVersionPromptFor
+  if (!instance) return
+  const path = state.externalVersionPath.trim()
+  const inode = state.externalVersionInode.trim()
+  if (!path && !inode) {
+    state.externalVersionError = 'Browse to a file, or enter an inode number'
+    return
+  }
+  state.busy = true
+  state.externalVersionError = ''
+  try {
+    const destination = state.externalVersionDestination || (await defaultViewDestination(instance.name || 'mount', 'ver'))
+    const result = await openVersionViewForInstance(
+      instance.mountPath,
+      instance.backend ?? 'auto',
+      destination,
+      path ? { path } : { inode },
+      state.externalVersionFormat,
+      state.externalVersionIdleTimeout.trim() || undefined,
+      state.externalVersionSecretValue || undefined,
+      state.externalVersionFullChain,
+    )
+    state.externalVersionPromptFor = null
+    state.externalVersionSecretValue = ''
+    await refresh(false)
+    notify(`Version view ready at ${result.target}`)
+  } catch (error) {
+    state.externalVersionError = describeError(error)
+  } finally {
+    state.busy = false
+  }
+}
+
+export function requestGatewayView(profile: MountProfile | undefined) {
+  if (!profile) return
+  state.view = 'profiles'
+  selectProfile(profile)
+  state.profileSubView = 'gateway'
 }
 
 export async function browseGatewayCert() {
@@ -1024,7 +1287,7 @@ export async function browseGatewayKey() {
 // gateways it launched itself, same class of gap as any externally-managed
 // process this app doesn't own.
 export async function confirmGatewayView() {
-  const profile = state.gatewayPromptFor
+  const profile = computed.selectedProfile
   if (!profile) return
   state.busy = true
   state.gatewayError = ''
@@ -1058,7 +1321,7 @@ export async function confirmGatewayView() {
         endpoints: result.endpoints,
       },
     ]
-    state.gatewayPromptFor = null
+    state.profileSubView = 'editor'
     state.gatewaySecretValue = ''
     await refresh(false)
     // An Iceberg-typed volume silently skips the gateway server-side
@@ -1187,17 +1450,21 @@ export async function persistSelected() {
   }
 }
 
-// Resets every piece of Fork management state, not just the secret: a stale
-// --force checkbox or "as of" value carrying over to a different profile's
-// Delete/Create action would be silently submitted without the user ever
-// having set it for that profile.
+// Resets every piece of sub-view state, not just each one's secret: a stale
+// --force checkbox, "as of" value, or destination carrying over to a
+// different profile's action would be silently submitted without the user
+// ever having set it for that profile. Also unconditionally lands back on
+// the plain editor (profileSubView = 'editor'), regardless of which of the
+// five sub-views was open for the profile being switched away from.
 export function selectProfile(profile: MountProfile) {
   state.selectedProfileId = profile.id
   state.selectedProfileSnapshotVolumeKind = profile.volumeKind
   state.extraArgsInput = profile.extraArgs.map(quoteArg).join(' ')
   state.extraArgsError = ''
   updatePreview(profile)
-  state.viewingForks = false
+
+  state.profileSubView = 'editor'
+
   state.forks = []
   state.forkDrillFid = null
   state.forkListSecretValue = ''
@@ -1215,6 +1482,42 @@ export function selectProfile(profile: MountProfile) {
   state.forkRestorePromptFor = null
   state.forkRestoreSecretValue = ''
   state.forkRestoreError = ''
+
+  state.snapshotDestination = ''
+  state.snapshotTimeMode = 'absolute'
+  state.snapshotAbsoluteValue = ''
+  state.snapshotRelativeQty = ''
+  state.snapshotRelativeUnit = 'h'
+  state.snapshotSecretValue = ''
+  state.snapshotError = ''
+
+  state.deletedDestination = ''
+  state.deletedFromMode = 'default'
+  state.deletedFromAbsoluteValue = ''
+  state.deletedFromRelativeQty = ''
+  state.deletedFromRelativeUnit = 'd'
+  state.deletedIdleTimeout = '30m'
+  state.deletedSecretValue = ''
+  state.deletedError = ''
+
+  state.versionDestination = ''
+  state.versionPath = ''
+  state.versionInode = ''
+  state.versionFullChain = false
+  state.versionFormat = 'number'
+  state.versionIdleTimeout = '30m'
+  state.versionSecretValue = ''
+  state.versionError = ''
+
+  state.gatewayS3 = true
+  state.gatewayHdfs = false
+  state.gatewayPort = ''
+  state.gatewayOnly = false
+  state.gatewayNoLoopback = false
+  state.gatewayCertPath = ''
+  state.gatewayKeyPath = ''
+  state.gatewaySecretValue = ''
+  state.gatewayError = ''
 }
 
 export function updatePreview(profile = selectedProfile) {

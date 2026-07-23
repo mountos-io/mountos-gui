@@ -39,7 +39,7 @@
               command={`mountos ${buildForkDeleteArgv(profile, appState.forkDeletePromptFor.name, appState.forkDeleteForce).join(' ')}`}
             />
           {/if}
-          <CommandPreview>
+          <CommandPreview label="COMMAND PREVIEW" text={`mountos ${buildForkDeleteArgv(profile, appState.forkDeletePromptFor.name, appState.forkDeleteForce).join(' ')}`}>
             <code>{`mountos ${buildForkDeleteArgv(profile, appState.forkDeletePromptFor.name, appState.forkDeleteForce).join(' ')}`}</code>
           </CommandPreview>
         </div>

@@ -2568,6 +2568,229 @@ async fn open_version_view(
     .map_err(|error| DesktopError::Message(format!("version view task failed: {error}")))?
 }
 
+// Deleted/Version view for an instance with no saved profile at all --
+// mounted from the terminal (or any tool outside this app). Profile is
+// deliberately optional here: forcing one into existence just to open a
+// satellite view would bloat the profile list for anyone who mounts from the
+// CLI as their main workflow. Credentials are re-derived from the live
+// mount's own .mountOS/.config instead of a persisted profile file,
+// preserving the same trust boundary find_profile enforces elsewhere in this
+// file -- nothing about identity or credentials is taken on the frontend's
+// word, it's re-read from a source this process didn't write.
+#[derive(Debug, Deserialize, Default)]
+struct LiveMountConfig {
+    #[serde(rename = "discoveryUrl", default)]
+    discovery_url: String,
+    #[serde(rename = "forkName", default)]
+    fork_name: String,
+    #[serde(rename = "accessId", default)]
+    access_id: String,
+    #[serde(rename = "volumeName", default)]
+    volume_name: String,
+    // "general" | "iceberg" | "" (legacy/unset, treated as general) -- same
+    // casing as MountConfig.VolumeType (mfusetypes/types.go). Iceberg
+    // volumes don't support Deleted/Version, mirroring the profile editor's
+    // own gate (ProfilesView.svelte's `{#if selectedProfile.volumeKind !==
+    // 'iceberg'}`).
+    #[serde(rename = "volumeType", default)]
+    volume_type: String,
+}
+
+// Pure and unit-testable on purpose: kept separate from the fs::read/
+// list_contains_target I/O in synthetic_profile_for_live_mount below, which
+// shells out to the real mountos binary and can't run in a test environment.
+fn live_mount_config_to_profile(mount_path: &str, backend: Backend, config: LiveMountConfig) -> Result<MountProfile, DesktopError> {
+    if config.volume_type.eq_ignore_ascii_case("iceberg") {
+        return Err(DesktopError::Message(
+            "Iceberg volumes don't support this view".to_string(),
+        ));
+    }
+    Ok(MountProfile {
+        id: format!("ext-{}", short_hash(mount_path)),
+        schema_version: 1,
+        kind: "mount".to_string(),
+        name: config.volume_name.clone(),
+        volume: config.volume_name,
+        fork: config.fork_name,
+        mount_path: mount_path.to_string(),
+        discovery_url: config.discovery_url,
+        access_key_id: config.access_id,
+        // Never "vault": this profile is never persisted, so there is no
+        // vault entry keyed by its (synthetic) id to read from. A non-empty
+        // access_key_id still requires the frontend to supply `secret`, via
+        // resolve_satellite_secret below, exactly like the profile-based
+        // flow's own secret-prompt UI.
+        secret_ref: "prompt".to_string(),
+        backend,
+        cache_dir: None,
+        read_only: false,
+        auto_remount: false,
+        temporary_fork: false,
+        trusted_discovery_host: None,
+        extra_args: Vec::new(),
+        created_at: String::new(),
+        updated_at: String::new(),
+        volume_kind: None,
+    })
+}
+
+fn synthetic_profile_for_live_mount(mount_path: &str, backend: Backend) -> Result<MountProfile, DesktopError> {
+    if !list_contains_target(mount_path)? {
+        return Err(DesktopError::Message(format!(
+            "not a currently active mount: {mount_path}"
+        )));
+    }
+    let config_path = PathBuf::from(mount_path).join(".mountOS").join(".config");
+    let bytes = fs::read(&config_path)
+        .map_err(|err| DesktopError::Message(format!("failed to read {}: {err}", config_path.display())))?;
+    let config: LiveMountConfig = serde_json::from_slice(&bytes)?;
+    live_mount_config_to_profile(mount_path, backend, config)
+}
+
+fn open_deleted_view_for_instance_blocking(
+    app: AppHandle,
+    mount_path: String,
+    backend: Backend,
+    destination: String,
+    from: Option<String>,
+    idle_timeout: Option<String>,
+    secret: Option<String>,
+) -> Result<MountResult, DesktopError> {
+    let mut profile = synthetic_profile_for_live_mount(&mount_path, backend)?;
+    validate_view_destination(&profile, &destination)?;
+    validate_backend_for_platform(&profile.backend)?;
+    resolve_auto_backend(&mut profile)?;
+    if list_contains_target(&destination)? {
+        return Err(DesktopError::Message(format!(
+            "target is already mounted: {destination}"
+        )));
+    }
+    reject_managed_extra_args(&profile)?;
+    let resolved_secret = resolve_satellite_secret(&profile, secret)?;
+    let args = build_deleted_argv(&profile, &destination, from.as_deref(), idle_timeout.as_deref());
+    let suffix = short_hash(&destination);
+    let stderr_path = runtime_dir(&app)?.join(format!("deleted-{}-{suffix}-stderr.log", profile.id));
+    let stdout_path = runtime_dir(&app)?.join(format!("deleted-{}-{suffix}-stdout.log", profile.id));
+    spawn_foreground_view_and_poll(
+        &mountos_path()?,
+        &args,
+        resolved_secret.as_deref(),
+        &stdout_path,
+        &stderr_path,
+        &destination,
+        LAUNCH_TIMEOUT,
+    )
+}
+
+#[tauri::command]
+async fn open_deleted_view_for_instance(
+    app: AppHandle,
+    mount_path: String,
+    backend: Backend,
+    destination: String,
+    from: Option<String>,
+    idle_timeout: Option<String>,
+    secret: Option<String>,
+) -> Result<MountResult, DesktopError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        open_deleted_view_for_instance_blocking(app, mount_path, backend, destination, from, idle_timeout, secret)
+    })
+    .await
+    .map_err(|error| DesktopError::Message(format!("deleted view task failed: {error}")))?
+}
+
+#[allow(clippy::too_many_arguments)]
+fn open_version_view_for_instance_blocking(
+    app: AppHandle,
+    mount_path: String,
+    backend: Backend,
+    destination: String,
+    path: Option<String>,
+    inode: Option<String>,
+    version_format: Option<String>,
+    idle_timeout: Option<String>,
+    secret: Option<String>,
+    full_chain: bool,
+) -> Result<MountResult, DesktopError> {
+    let mut profile = synthetic_profile_for_live_mount(&mount_path, backend)?;
+    validate_view_destination(&profile, &destination)?;
+    let path = path.as_deref().map(str::trim).filter(|value| !value.is_empty());
+    // Inodes travel as strings end-to-end (see MountInstance.version_inode):
+    // a JS `number` silently loses precision above Number.MAX_SAFE_INTEGER.
+    let parsed_inode: Option<u64> = match inode.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        Some(raw) => Some(
+            raw.parse()
+                .map_err(|_| DesktopError::Message(format!("invalid inode number: {raw:?}")))?,
+        ),
+        None => None,
+    };
+    if path.is_none() && parsed_inode.is_none() {
+        return Err(DesktopError::Message("provide a file path or an inode number".to_string()));
+    }
+    validate_backend_for_platform(&profile.backend)?;
+    resolve_auto_backend(&mut profile)?;
+    if list_contains_target(&destination)? {
+        return Err(DesktopError::Message(format!(
+            "target is already mounted: {destination}"
+        )));
+    }
+    reject_managed_extra_args(&profile)?;
+    let resolved_secret = resolve_satellite_secret(&profile, secret)?;
+    let args = build_version_argv(
+        &profile,
+        &destination,
+        path,
+        parsed_inode,
+        version_format.as_deref(),
+        idle_timeout.as_deref(),
+        full_chain,
+    );
+    let suffix = short_hash(&destination);
+    let stderr_path = runtime_dir(&app)?.join(format!("version-{}-{suffix}-stderr.log", profile.id));
+    let stdout_path = runtime_dir(&app)?.join(format!("version-{}-{suffix}-stdout.log", profile.id));
+    spawn_foreground_view_and_poll(
+        &mountos_path()?,
+        &args,
+        resolved_secret.as_deref(),
+        &stdout_path,
+        &stderr_path,
+        &destination,
+        LAUNCH_TIMEOUT,
+    )
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn open_version_view_for_instance(
+    app: AppHandle,
+    mount_path: String,
+    backend: Backend,
+    destination: String,
+    path: Option<String>,
+    inode: Option<String>,
+    version_format: Option<String>,
+    idle_timeout: Option<String>,
+    secret: Option<String>,
+    full_chain: bool,
+) -> Result<MountResult, DesktopError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        open_version_view_for_instance_blocking(
+            app,
+            mount_path,
+            backend,
+            destination,
+            path,
+            inode,
+            version_format,
+            idle_timeout,
+            secret,
+            full_chain,
+        )
+    })
+    .await
+    .map_err(|error| DesktopError::Message(format!("version view task failed: {error}")))?
+}
+
 // Mirrors mountos-servers' gatewayDescriptor JSON exactly (snake_case keys
 // as written by Go's `json:"..."` tags, hence no #[serde(rename_all)] here
 // -- Rust's own field names already are snake_case). Deliberately reading
@@ -3942,6 +4165,8 @@ pub fn run() {
             open_snapshot_view,
             open_deleted_view,
             open_version_view,
+            open_deleted_view_for_instance,
+            open_version_view_for_instance,
             open_gateway,
             stop_gateway,
             stop_gateway_only,
@@ -4350,6 +4575,63 @@ mod tests {
         p.backend = Backend::Macfuse;
         let argv = build_snapshot_argv(&p, "/tmp/snap-view", "1d");
         assert!(argv.contains(&"--macfuse".to_string()));
+    }
+
+    // Guards the hand-synced JSON contract against mfusetypes.MountConfig
+    // (mountos-servers/cmd/mfuse/mfusetypes/types.go) -- a typo'd #[serde(rename)]
+    // here would silently deserialize every field as empty rather than fail.
+    #[test]
+    fn live_mount_config_deserializes_the_go_field_names() {
+        let config: LiveMountConfig = serde_json::from_str(
+            r#"{"discoveryUrl":"https://hub.example.com","forkName":"main","accessId":"ABCDEFGHIJKLMNOPQRST","volumeName":"Team files","volumeType":"general","mountTime":"2026-07-23T00:00:00Z","pid":123}"#,
+        )
+        .unwrap();
+        assert_eq!(config.discovery_url, "https://hub.example.com");
+        assert_eq!(config.fork_name, "main");
+        assert_eq!(config.access_id, "ABCDEFGHIJKLMNOPQRST");
+        assert_eq!(config.volume_name, "Team files");
+        assert_eq!(config.volume_type, "general");
+    }
+
+    #[test]
+    fn live_mount_config_tolerates_missing_fields() {
+        let config: LiveMountConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(config.discovery_url, "");
+        assert_eq!(config.volume_type, "");
+    }
+
+    #[test]
+    fn synthetic_profile_from_live_mount_config_carries_credentials_and_never_persists() {
+        let config = LiveMountConfig {
+            discovery_url: "https://hub.example.com".to_string(),
+            fork_name: "main".to_string(),
+            access_id: "ABCDEFGHIJKLMNOPQRST".to_string(),
+            volume_name: "Team files".to_string(),
+            volume_type: "general".to_string(),
+        };
+        let profile = live_mount_config_to_profile("/Volumes/MountOS/Team", Backend::Fskit, config).unwrap();
+        assert_eq!(profile.discovery_url, "https://hub.example.com");
+        assert_eq!(profile.fork, "main");
+        assert_eq!(profile.access_key_id, "ABCDEFGHIJKLMNOPQRST");
+        assert_eq!(profile.volume, "Team files");
+        assert_eq!(profile.mount_path, "/Volumes/MountOS/Team");
+        assert!(matches!(profile.backend, Backend::Fskit));
+        // Never "vault": there's no vault entry for a profile that's never
+        // saved, so resolve_satellite_secret must fall through to whatever
+        // the frontend explicitly supplies for this call, not the keyring.
+        assert_eq!(profile.secret_ref, "prompt");
+        assert!(profile.extra_args.is_empty());
+        assert!(profile.cache_dir.is_none());
+    }
+
+    #[test]
+    fn synthetic_profile_rejects_iceberg_volumes() {
+        let config = LiveMountConfig {
+            volume_type: "Iceberg".to_string(),
+            ..Default::default()
+        };
+        let result = live_mount_config_to_profile("/Volumes/MountOS/Lake", Backend::Fskit, config);
+        assert!(result.is_err());
     }
 
     #[test]

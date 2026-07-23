@@ -52,7 +52,7 @@
               command={`mountos ${buildForkCreateArgv(appState.forkCreatePromptFor, appState.forkCreateName.trim() || '<name>', appState.forkCreateParent, computed.forkCreateAsOf).join(' ')}`}
             />
           {/if}
-          <CommandPreview>
+          <CommandPreview label="COMMAND PREVIEW" text={`mountos ${buildForkCreateArgv(appState.forkCreatePromptFor, appState.forkCreateName.trim() || '<name>', appState.forkCreateParent, computed.forkCreateAsOf).join(' ')}`}>
             <code>{`mountos ${buildForkCreateArgv(appState.forkCreatePromptFor, appState.forkCreateName.trim() || '<name>', appState.forkCreateParent, computed.forkCreateAsOf).join(' ')}`}</code>
           </CommandPreview>
         </div>

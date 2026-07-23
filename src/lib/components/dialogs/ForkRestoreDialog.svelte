@@ -33,7 +33,7 @@
               command={`mountos ${buildForkRestoreArgv(profile, appState.forkRestorePromptFor.name).join(' ')}`}
             />
           {/if}
-          <CommandPreview>
+          <CommandPreview label="COMMAND PREVIEW" text={`mountos ${buildForkRestoreArgv(profile, appState.forkRestorePromptFor.name).join(' ')}`}>
             <code>{`mountos ${buildForkRestoreArgv(profile, appState.forkRestorePromptFor.name).join(' ')}`}</code>
           </CommandPreview>
         </div>

@@ -198,6 +198,47 @@ export async function openVersionView(
   })
 }
 
+// For an instance with no saved profile (mounted from the terminal, or any
+// tool outside this app) -- the Rust side re-derives credentials from the
+// live mount's own .mountOS/.config rather than trusting anything passed
+// here about identity. `backend` is the instance's own already-known,
+// non-sensitive backend string (from `mountos list --json`), not a secret.
+export async function openDeletedViewForInstance(
+  mountPath: string,
+  backend: string,
+  destination: string,
+  from?: string,
+  idleTimeout?: string,
+  secret?: string,
+): Promise<MountResult> {
+  if (!hasDesktopBridge()) throw new Error('Desktop bridge unavailable')
+  return invoke<MountResult>('open_deleted_view_for_instance', { mountPath, backend, destination, from, idleTimeout, secret })
+}
+
+export async function openVersionViewForInstance(
+  mountPath: string,
+  backend: string,
+  destination: string,
+  selector: { path: string } | { inode: string },
+  versionFormat?: string,
+  idleTimeout?: string,
+  secret?: string,
+  fullChain?: boolean,
+): Promise<MountResult> {
+  if (!hasDesktopBridge()) throw new Error('Desktop bridge unavailable')
+  return invoke<MountResult>('open_version_view_for_instance', {
+    mountPath,
+    backend,
+    destination,
+    path: 'path' in selector ? selector.path : undefined,
+    inode: 'inode' in selector ? selector.inode : undefined,
+    versionFormat,
+    idleTimeout,
+    secret,
+    fullChain,
+  })
+}
+
 export async function openGateway(
   profileId: string,
   params: GatewayLaunchParams,

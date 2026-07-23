@@ -45,7 +45,7 @@
   {#each arrays as [key, value] (key)}
     <div class="grid gap-1">
       <span class="font-mono text-xs text-muted-foreground">{humanizeKey(key)}</span>
-      <CommandPreview><code>{(value as unknown[]).join(', ')}</code></CommandPreview>
+      <CommandPreview text={(value as unknown[]).join(', ')}><code>{(value as unknown[]).join(', ')}</code></CommandPreview>
     </div>
   {/each}
 
