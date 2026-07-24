@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Bot, FileArchive, HardDrive, Lightbulb, MonitorDot, Palette, PanelLeft, Plus, RefreshCw, ScrollText, Settings, TerminalSquare, Unplug } from '@lucide/svelte'
+  import { Bot, FileArchive, HardDrive, Info, Lightbulb, Mail, MonitorDot, Palette, PanelLeft, Plus, RefreshCw, ScrollText, Settings, TerminalSquare, Unplug } from '@lucide/svelte'
   import * as Command from '$lib/components/ui/command'
   import { appState, createBundle, goToSettingsSection, newProfile, refresh, requestUnmountAll, selectProfile, showLicenses, showTips, toggleSidebar } from '$lib/app-state.svelte'
   import type { View } from '$lib/app-state.svelte'
@@ -56,6 +56,14 @@
       <Command.CommandItem value="MCP for AI agents" keywords={['mcp', 'model context protocol', 'ai agent', 'claude', 'codex', 'gemini']} onSelect={() => run(() => goToSettingsSection('settings-mcp'))}>
         <Bot class="mr-2 h-4 w-4" />
         MCP for AI agents
+      </Command.CommandItem>
+      <Command.CommandItem value="About mountOS" keywords={['version', 'platform', 'cli', 'support', 'licenses']} onSelect={() => run(() => goToSettingsSection('settings-about'))}>
+        <Info class="mr-2 h-4 w-4" />
+        About mountOS
+      </Command.CommandItem>
+      <Command.CommandItem value="Support" keywords={['help', 'contact', 'email', 'mailto']} onSelect={() => run(() => goToSettingsSection('settings-about'))}>
+        <Mail class="mr-2 h-4 w-4" />
+        Support
       </Command.CommandItem>
     </Command.CommandGroup>
 

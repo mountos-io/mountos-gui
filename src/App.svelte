@@ -43,6 +43,7 @@
   ]
 
   let commandPaletteOpen = $state(false)
+  let viewScroller: HTMLDivElement | undefined = $state()
 
   function handleGlobalKeydown(event: KeyboardEvent) {
     const modPressed = modKeyPressed(event, appState.systemState.platform)
@@ -100,6 +101,11 @@
   })
 
   $effect(() => initThemeSync())
+
+  $effect(() => {
+    appState.view
+    if (viewScroller) viewScroller.scrollTop = 0
+  })
 
   $effect(() => {
     void loadSettings()
@@ -240,7 +246,7 @@
     </header>
 
     <div class="relative flex min-h-0 min-w-0 flex-1 flex-col">
-      <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto">
+      <div bind:this={viewScroller} class="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto">
         {#if appState.view === 'instances'}
           <InstancesView />
         {:else if appState.view === 'profiles'}

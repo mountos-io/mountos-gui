@@ -389,6 +389,10 @@ const UNMOUNT_TIMEOUT: Duration = Duration::from_secs(120);
 // two in sync intentionally, since a shorter value here would mask that
 // server-side context's own descriptive timeout error with a generic one.
 const FORK_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+// A local `--version` probe of a user-picked candidate binary, not a network
+// round trip -- bounded tight so an unresponsive/hung pick fails fast rather
+// than leaving the settings UI stuck validating.
+const CLI_VALIDATE_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn keyring_entry(profile_id: &str) -> Result<keyring::Entry, DesktopError> {
     validate_profile_id(profile_id)?;
@@ -1334,6 +1338,88 @@ fn get_third_party_licenses(app: AppHandle, kind: String) -> Result<Value, Deskt
     };
     let content = fs::read_to_string(licenses_dir(&app)?.join(file_name))?;
     Ok(serde_json::from_str(&content)?)
+}
+
+// Frontend-supplied URL (a license package's repository link), so scheme-gated
+// to http(s) -- open::that_detached otherwise hands whatever string it's given
+// straight to the OS shell, which is a broader "open anything" primitive than
+// a link needs.
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), DesktopError> {
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        return Err(DesktopError::Message(
+            "only http/https URLs can be opened".to_string(),
+        ));
+    }
+    open::that_detached(url)?;
+    Ok(())
+}
+
+// Runs `<path> --version` and checks the output starts with "mountos" --
+// cheap, side-effect-free confirmation that a user-picked binary (from the
+// pin-CLI-path file browser) is actually our CLI, rather than pinning
+// whatever executable the file picker happened to return. stdin is closed so
+// a program that reads from it can't block waiting for input; stdout/stderr
+// are drained on their own threads (mirrors run_cli_with_secret) so a chatty
+// candidate can't deadlock the pipe before wait_child's timeout applies.
+#[tauri::command]
+fn validate_cli_candidate(path: String) -> Result<String, DesktopError> {
+    let candidate = PathBuf::from(&path);
+    if !candidate.is_file() {
+        return Err(DesktopError::Message(format!("{path} is not a file")));
+    }
+    let mut child = Command::new(&candidate)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let mut stdout_pipe = child.stdout.take();
+    let mut stderr_pipe = child.stderr.take();
+    let stdout_handle = thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(pipe) = stdout_pipe.as_mut() {
+            let _ = pipe.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let stderr_handle = thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(pipe) = stderr_pipe.as_mut() {
+            let _ = pipe.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let Some(status) = wait_child(&mut child, CLI_VALIDATE_TIMEOUT)? else {
+        return Err(DesktopError::Message(format!(
+            "{path} --version did not respond within {}s",
+            CLI_VALIDATE_TIMEOUT.as_secs()
+        )));
+    };
+    let stdout = String::from_utf8_lossy(&stdout_handle.join().unwrap_or_default())
+        .trim()
+        .to_string();
+    let stderr = String::from_utf8_lossy(&stderr_handle.join().unwrap_or_default())
+        .trim()
+        .to_string();
+    if !status.success() {
+        return Err(DesktopError::Message(if stderr.is_empty() {
+            format!("{path} --version exited with {status}")
+        } else {
+            stderr
+        }));
+    }
+    if stdout.split_whitespace().next() != Some("mountos") {
+        return Err(DesktopError::Message(format!(
+            "{path} does not look like the mountos CLI ({})",
+            if stdout.is_empty() {
+                "--version printed nothing".to_string()
+            } else {
+                format!("--version printed: {stdout}")
+            }
+        )));
+    }
+    Ok(stdout)
 }
 
 fn cli_version() -> Option<String> {
@@ -4201,6 +4287,8 @@ pub fn run() {
             mcp_uninstall,
             mount_help,
             get_third_party_licenses,
+            open_external_url,
+            validate_cli_candidate,
             show_main_window,
         ])
         .run(tauri::generate_context!())

@@ -5,27 +5,74 @@
   import { Button } from '$lib/components/ui/button'
   import { Input } from '$lib/components/ui/input'
   import { Badge } from '$lib/components/ui/badge'
+  import { Skeleton } from '$lib/components/ui/skeleton'
+  import { cn } from '$lib/utils'
   import { appState, hideLicenses, setLicensesKind } from '$lib/app-state.svelte'
+  import { openExternalUrl } from '$lib/tauri'
+  import { showErrorToast } from '$lib/toast.svelte'
   import type { LicenseGroup } from '$lib/types'
 
+  interface LicenseRow {
+    key: string
+    pkgName: string
+    pkgVersion: string
+    repository: string | null
+    license: LicenseGroup
+  }
+
   let query = $state('')
+  let selectedKey = $state('')
 
   const active = $derived(appState.licensesData[appState.licensesKind])
-  const filtered = $derived.by(() => {
+
+  const rows = $derived.by(() => {
     const licenses = active?.licenses ?? []
+    const result: LicenseRow[] = []
+    licenses.forEach((license, groupIndex) => {
+      license.packages.forEach((pkg, pkgIndex) => {
+        result.push({
+          key: `${groupIndex}-${pkgIndex}`,
+          pkgName: pkg.name,
+          pkgVersion: pkg.version,
+          repository: pkg.repository,
+          license,
+        })
+      })
+    })
+    result.sort((a, b) => a.pkgName.localeCompare(b.pkgName) || a.pkgVersion.localeCompare(b.pkgVersion))
+    return result
+  })
+
+  const filtered = $derived.by(() => {
     const q = query.trim().toLowerCase()
-    if (!q) return licenses
-    return licenses.filter(
-      (license: LicenseGroup) =>
-        license.id.toLowerCase().includes(q) ||
-        license.name.toLowerCase().includes(q) ||
-        license.packages.some((pkg) => pkg.name.toLowerCase().includes(q)),
+    if (!q) return rows
+    return rows.filter(
+      (row) =>
+        row.pkgName.toLowerCase().includes(q) ||
+        row.license.id.toLowerCase().includes(q) ||
+        row.license.name.toLowerCase().includes(q),
     )
   })
+
+  const selected = $derived(filtered.find((row) => row.key === selectedKey) ?? filtered[0])
+
+  $effect(() => {
+    if (!filtered.some((row) => row.key === selectedKey)) {
+      selectedKey = filtered[0]?.key ?? ''
+    }
+  })
+
+  async function openRepository(url: string) {
+    try {
+      await openExternalUrl(url)
+    } catch (error) {
+      showErrorToast(error instanceof Error ? error.message : 'Failed to open link')
+    }
+  }
 </script>
 
 <Dialog.Root bind:open={() => appState.licensesOpen, (open) => { if (!open) hideLicenses() }}>
-  <Dialog.Content class="sm:max-w-3xl" aria-describedby={undefined}>
+  <Dialog.Content class="sm:max-w-5xl" aria-describedby={undefined}>
     <Dialog.Header>
       <Dialog.Title class="flex items-center gap-2"><ScrollText size={20} aria-hidden="true" /> Third Party Licenses</Dialog.Title>
     </Dialog.Header>
@@ -41,38 +88,77 @@
         <Input bind:value={query} placeholder="Search by package or license" class="pl-8" />
       </div>
 
-      <div class="grid gap-2 max-h-[55vh] overflow-auto">
-        {#if appState.licensesLoading}
-          <p class="text-sm text-muted-foreground">Loading licenses...</p>
-        {:else if appState.licensesError}
-          <p class="text-sm text-destructive">{appState.licensesError}</p>
-        {:else if filtered.length === 0}
-          <p class="text-sm text-muted-foreground">{active?.licenses.length ? `No licenses match "${query}".` : 'No license data available.'}</p>
-        {:else}
-          {#each filtered as license (`${license.id}|${license.name}|${license.packages.map((p) => p.name).join(',')}`)}
-            <details class="border border-border p-2">
-              <summary class="cursor-pointer flex items-center gap-2">
-                <Badge variant="outline">{license.id}</Badge>
-                <span class="text-sm">{license.packages.map((pkg) => pkg.name).join(', ')}</span>
-              </summary>
-              <div class="grid gap-2 pt-2">
-                <ul class="text-xs text-muted-foreground grid gap-0.5">
-                  {#each license.packages as pkg (pkg.name + pkg.version)}
-                    <li>
-                      {#if pkg.repository}
-                        <a href={pkg.repository} target="_blank" rel="noopener noreferrer" class="hover:underline">{pkg.name}@{pkg.version}</a>
-                      {:else}
-                        {pkg.name}@{pkg.version}
-                      {/if}
-                    </li>
-                  {/each}
-                </ul>
-                <pre class="m-0 max-h-64 overflow-auto whitespace-pre-wrap break-words border border-border bg-muted p-2 text-xs"><code>{license.text}</code></pre>
+      {#if appState.licensesLoading}
+        <div class="grid grid-cols-[minmax(0,220px)_1fr] gap-3 h-[55vh]" role="status" aria-busy="true" aria-label="Loading licenses">
+          <div class="grid gap-1 content-start overflow-auto border border-border p-1">
+            {#each { length: 8 } as _, i (i)}
+              <div class="grid gap-1.5 px-2 py-1.5">
+                <Skeleton class="h-3.5 w-24" />
+                <Skeleton class="h-3 w-16" />
               </div>
-            </details>
-          {/each}
-        {/if}
-      </div>
+            {/each}
+          </div>
+          <div class="grid gap-3 content-start overflow-auto border border-border p-3">
+            <div class="flex items-center gap-2">
+              <Skeleton class="h-4 w-40" />
+              <Skeleton class="h-4 w-14" />
+            </div>
+            <div class="grid gap-2">
+              {#each { length: 10 } as _, i (i)}
+                <Skeleton class="h-3 {i % 3 === 2 ? 'w-2/3' : 'w-full'}" />
+              {/each}
+            </div>
+          </div>
+        </div>
+      {:else if appState.licensesError}
+        <p class="text-base text-destructive">{appState.licensesError}</p>
+      {:else if filtered.length === 0}
+        <p class="text-base text-muted-foreground">{rows.length ? `No packages match "${query}".` : 'No license data available.'}</p>
+      {:else}
+        <div class="grid grid-cols-[minmax(0,220px)_1fr] gap-3 h-[55vh]">
+          <div class="grid gap-1 content-start overflow-auto border border-border p-1">
+            {#each filtered as row (row.key)}
+              <button
+                type="button"
+                class={cn(
+                  'grid gap-0.5 border border-transparent px-2 py-1.5 text-left text-base hover:bg-accent',
+                  selected?.key === row.key && 'border-border bg-accent',
+                )}
+                aria-pressed={selected?.key === row.key}
+                onclick={() => (selectedKey = row.key)}
+              >
+                <span class="truncate font-medium">{row.pkgName}</span>
+                <span class="flex items-center gap-1 text-muted-foreground">
+                  <Badge variant="outline">{row.license.id}</Badge>
+                  <Badge variant="outline">{row.pkgVersion}</Badge>
+                </span>
+              </button>
+            {/each}
+          </div>
+          <div class="grid gap-2 content-start overflow-auto border border-border p-3">
+            {#if selected}
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="flex items-center gap-2">
+                  <span class="text-base font-medium">{selected.pkgName}</span>
+                  <Badge variant="outline">{selected.pkgVersion}</Badge>
+                  <Badge variant="outline">{selected.license.id}</Badge>
+                </div>
+                {#if selected.repository}
+                  <a
+                    href={selected.repository}
+                    class="text-base text-muted-foreground hover:underline"
+                    onclick={(event) => {
+                      event.preventDefault()
+                      void openRepository(selected.repository!)
+                    }}
+                  >{selected.repository}</a>
+                {/if}
+              </div>
+              <pre class="m-0 whitespace-pre-wrap break-words border border-border bg-muted p-2 text-base"><code>{selected.license.text}</code></pre>
+            {/if}
+          </div>
+        </div>
+      {/if}
     </div>
 
     <Dialog.Footer>

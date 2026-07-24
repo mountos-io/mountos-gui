@@ -323,6 +323,22 @@ export async function getThirdPartyLicenses(kind: 'rust' | 'js'): Promise<ThirdP
   return invoke<ThirdPartyLicenses>('get_third_party_licenses', { kind })
 }
 
+export async function openExternalUrl(url: string): Promise<void> {
+  if (!hasDesktopBridge()) throw new Error('Desktop bridge unavailable')
+  await invoke('open_external_url', { url })
+}
+
+export async function browseCliBinary(defaultPath?: string): Promise<string | null> {
+  if (!hasDesktopBridge()) return null
+  const selected = await open({ directory: false, multiple: false, title: 'Choose the mountos CLI binary', defaultPath })
+  return typeof selected === 'string' ? selected : null
+}
+
+export async function validateCliCandidate(path: string): Promise<string> {
+  if (!hasDesktopBridge()) throw new Error('Desktop bridge unavailable')
+  return invoke<string>('validate_cli_candidate', { path })
+}
+
 export async function showMainWindow(): Promise<void> {
   if (!hasDesktopBridge()) return
   await invoke('show_main_window')

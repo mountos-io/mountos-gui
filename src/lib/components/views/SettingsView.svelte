@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { AlertTriangle, Bot, FileArchive, FolderOpen, Monitor, Moon, RefreshCw, ScrollText, ShieldCheck, Sun } from '@lucide/svelte'
+  import { AlertTriangle, Bot, FileArchive, FolderOpen, Mail, Monitor, Moon, RefreshCw, ScrollText, ShieldCheck, Sun } from '@lucide/svelte'
   import { Button } from '$lib/components/ui/button'
   import { Input } from '$lib/components/ui/input'
   import { Label } from '$lib/components/ui/label'
@@ -20,7 +20,6 @@
     browseDefaultCacheDir,
     changeAllowForkForceDelete,
     changeAllowUnmountForce,
-    changeCliPathOverride,
     changeDefaultBackend,
     changeDefaultCacheDir,
     changeDefaultCacheSize,
@@ -28,11 +27,13 @@
     changePollSeconds,
     changeTerminal,
     checkMcpStatus,
+    clearCliPathOverride,
     computed,
     createBundle,
     DEFAULT_POLL_SECONDS,
     installMcp,
     openBundle,
+    pickCliPathOverride,
     POLL_CHOICES,
     refresh,
     setSkipUnmountConfirm,
@@ -54,6 +55,17 @@
     { value: 'extra-large', label: 'Extra Large' },
     { value: 'jumbo', label: 'Jumbo' },
   ]
+
+  let cliPathValidating = $state(false)
+
+  async function browseCliPathOverride() {
+    cliPathValidating = true
+    try {
+      await pickCliPathOverride()
+    } finally {
+      cliPathValidating = false
+    }
+  }
 
   const backendOptions = $derived(computed.backends.map((backend) => ({ value: backend, label: backend })))
   const terminalOptions = $derived([
@@ -282,7 +294,7 @@
   </div>
 </section>
 
-<section class="surface m-[22px] p-4 grid gap-4">
+<section class="surface m-[22px] p-4 grid gap-4" id="settings-about">
   <h3>About mountOS</h3>
   <div class="flex items-center justify-between gap-4">
     <span><strong>Platform</strong></span>
@@ -305,20 +317,30 @@
   {/if}
 
   <div class="grid gap-1.5">
-    <span class="inline-flex items-center gap-1"><strong id="settings-cli-path-override-label">Pin CLI path</strong><InfoTip text="Overrides PATH lookup with this exact binary; empty uses PATH." /></span>
-    <Input
-      type="text"
-      placeholder={appState.systemState.cliPath ?? '/usr/local/bin/mountos'}
-      value={appState.settings.cliPathOverride ?? ''}
-      onchange={(e) => changeCliPathOverride(e.currentTarget.value)}
-      aria-labelledby="settings-cli-path-override-label"
-    />
+    <span class="inline-flex items-center gap-1"><strong id="settings-cli-path-override-label">Pin CLI path</strong><InfoTip text="Pick the mountos binary from disk. It's run with --version and only pinned if the output looks like mountos; cleared uses PATH lookup." /></span>
+    <div class="flex items-center gap-2">
+      <code class="flex-1 truncate" aria-labelledby="settings-cli-path-override-label">{appState.settings.cliPathOverride ?? 'Using PATH lookup'}</code>
+      {#if appState.settings.cliPathOverride}
+        <Button type="button" variant="outline" onclick={clearCliPathOverride} class="shrink-0">Clear</Button>
+      {/if}
+      <Button type="button" onclick={browseCliPathOverride} disabled={cliPathValidating} class="shrink-0">
+        <FolderOpen size={16} aria-hidden="true" />
+        {cliPathValidating ? 'Validating…' : 'Browse'}
+      </Button>
+    </div>
   </div>
   <div class="flex items-center justify-between gap-4">
     <span><strong>Third party licenses</strong></span>
     <Button type="button" variant="outline" onclick={showLicenses}>
       <ScrollText size={16} aria-hidden="true" />
       View
+    </Button>
+  </div>
+  <div class="flex items-center justify-between gap-4">
+    <span><strong>Support</strong></span>
+    <Button type="button" variant="outline" href="mailto:support@mountos.io">
+      <Mail size={16} aria-hidden="true" />
+      support@mountos.io
     </Button>
   </div>
 </section>
@@ -425,7 +447,7 @@
   }
 
   .sw-label {
-    font-size: 0.75rem;
+    font-size: 1rem;
     font-weight: 500;
     color: var(--sw-fg);
     white-space: nowrap;

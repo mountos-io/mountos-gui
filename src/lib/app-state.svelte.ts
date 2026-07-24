@@ -20,6 +20,7 @@ import {
 } from './cli'
 import { viewModeBadge } from './health'
 import {
+  browseCliBinary,
   browseFolder,
   browseVersionFile as pickVersionFile,
   createDiagnosticsBundle,
@@ -59,6 +60,7 @@ import {
   stopGatewayOnly,
   unmountTarget,
   unmountAllTargets,
+  validateCliCandidate,
 } from './tauri'
 import type {
   Backend,
@@ -2035,11 +2037,27 @@ export async function toggleDefaultCacheSizeAuto(auto: boolean) {
   await changeDefaultCacheSize(auto ? '' : state.settings.defaultCacheSize || AGGRESSIVE_CACHE_SIZE)
 }
 
-export async function changeCliPathOverride(path: string) {
-  const trimmed = path.trim()
+// Browse-only (no free-typed path): a mistyped or malicious path could pin
+// to something that isn't mountos at all, so the candidate is both picked
+// from disk and validated (validateCliCandidate runs `--version` and checks
+// the output) before it's ever written to settings.
+export async function pickCliPathOverride() {
+  const chosen = await browseCliBinary(state.settings.cliPathOverride ?? state.systemState.cliPath ?? undefined)
+  if (!chosen) return
   try {
-    state.settings = await saveSettings({ ...state.settings, cliPathOverride: trimmed || undefined })
-    notify(trimmed ? 'Pinned mountos CLI path' : 'CLI path pin cleared, using PATH lookup again')
+    await validateCliCandidate(chosen)
+    state.settings = await saveSettings({ ...state.settings, cliPathOverride: chosen })
+    notify('Pinned mountos CLI path')
+    await refresh(false)
+  } catch (error) {
+    notify(error instanceof Error ? error.message : 'That binary does not look like the mountos CLI', 'error')
+  }
+}
+
+export async function clearCliPathOverride() {
+  try {
+    state.settings = await saveSettings({ ...state.settings, cliPathOverride: undefined })
+    notify('CLI path pin cleared, using PATH lookup again')
     await refresh(false)
   } catch (error) {
     notify(error instanceof Error ? error.message : 'Failed to save settings', 'error')
